@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Tutor 设置</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #10131c;
+        color: #e8ebf4;
+        font: 14px/1.6 system-ui, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(560px, calc(100vw - 48px));
+        margin: 48px auto;
+        padding: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        background: #171b27;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 20px;
+      }
+      .sub {
+        margin: 0 0 20px;
+        color: #8b93a8;
+        font-size: 13px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 14px;
+        color: #c7cee0;
+        font-size: 13px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 9px 11px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 9px;
+        background: #0e1119;
+        color: #e8ebf4;
+        font: inherit;
+        outline: none;
+      }
+      input:focus {
+        border-color: #5b7cff;
+      }
+      button {
+        padding: 9px 18px;
+        border: 0;
+        border-radius: 9px;
+        background: linear-gradient(135deg, #4f7cff, #7b5cff);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #status {
+        min-height: 22px;
+        margin: 12px 0 0;
+        color: #7dd3a0;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Video Tutor</h1>
+      <p class="sub">设置只保存在本机浏览器里，不会上传。</p>
+
+      <label>
+        DeepSeek API Key
+        <input id="api-key" type="password" placeholder="sk-..." autocomplete="off" />
+      </label>
+
+      <label>
+        视觉模型
+        <input id="vision-model" type="text" />
+      </label>
+
+      <label>
+        文本模型
+        <input id="text-model" type="text" />
+      </label>
+
+      <button id="save">保存</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

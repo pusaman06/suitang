@@ -1,0 +1,452 @@
+# 视频学习助手（B 站）· 技术方案 v0.1
+
+> 状态：D1 脚手架已完成（2026-11-05），等用户加载验收；D2 从字幕 spike 开始
+> 日期：2026-11-05
+> 关联：grilling 决策见文末「决策记录」
+
+---
+
+## 1. 目标与非目标
+
+### 1.1 一句话
+
+在 B 站看课时，**暂停即可问 AI**；它读过整份字幕、能看到当前画面、回答带可点击时间戳；视频数据存在本地，之后在 DSH 里随时复习。
+
+### 1.2 v1.0 必须做到（第一周结束）
+
+- 打开有字幕的 B 站视频，自动抓字幕并生成大纲（「已预习」）
+- 暂停后点悬浮球或按 `Alt+Q`，5 秒内给出回答
+- 回答**至少引用 1 个时间戳**，点击可跳转到视频对应位置
+- 同一视频内多轮追问；刷新页面后历史还在
+- 无字幕视频给出明确提示，不崩
+
+### 1.3 v1.1 追加（第二周结束）
+
+- 本地 companion 落盘，每个视频一份 JSON + 一份 Markdown
+- DSH 技能 `video-notes`：搜「上次那个 XX 视频」、读大纲/讲稿、基于原文追问
+- 一键标记「没懂」的时间点，进复习清单
+
+### 1.4 明确不做（v1）
+
+- 华为云学堂等其它平台（v2，用适配器扩展）
+- ASR / 语音转写（无字幕视频只做「按画面回答」）
+- RAG / 向量库（v1 用「大纲 + 时间窗」检索，够用）
+- Chrome 商店发布、移动端、多人协作
+- 下载视频文件（只取字幕 + 暂停帧，不碰视频流）
+
+---
+
+## 2. 已定决策
+
+| # | 决策 | 选择 | 理由 |
+|---|---|---|---|
+| 1 | 首要目的 | 工具优先，学习顺带 | 第一次做扩展，但功能确实要用 |
+| 2 | 平台 | v1 只做 B 站 | 有字幕、有时间戳、页面结构稳定 |
+| 3 | 输入依据 | 字幕为主 + 按需帧 | 准确性主体在字幕，画面只补「看得见但说不清」的内容 |
+| 4 | 预解析 | 打开视频时后台建索引（字幕 + 大纲） | 回答有全局观，不用每次从零读 |
+| 5 | 模型 | DeepSeek `deepseek-v4-flash-vision-exp` + BYOK | 单图 ≤384 token，一个 Key 搞定文本和视觉 |
+| 6 | 预算 | 每月 10–20 元封顶 | 正常学习强度远低于此 |
+| 7 | 技术栈 | 原生 TS + Vite，无 React | 代码量小，每一步看得懂 |
+| 8 | 节奏 | 第一周扩展 MVP，第二周接 DSH | 先有能用的东西，再接复习 |
+| 9 | DSH 复习 | 技能读本地知识库，搜索 + 总结 + 深挖 | 不需要 RAG，文件 + 关键词就够 |
+| 10 | 交互 | 悬浮球 + Shadow DOM 浮层面板；侧栏可选 | 全屏可用，不挡画面 |
+| 11 | 视觉预习 | 默认关；可选「按变化拼图」 | 借鉴 See Now，幻灯片课再开 |
+
+---
+
+## 3. 架构
+
+```
+┌──────────────────── B 站视频页 ────────────────────┐
+│  <video>                                           │
+│  content script                                    │
+│   · 检测 bvid / cid / 标题 / 时长 / 当前时间        │
+│   · 抓字幕（带登录态）                              │
+│   · 悬浮球 + Shadow DOM 面板                        │
+│   · 暂停 / Alt+Q / 时间戳跳转                       │
+└──────────┬──────────────────────────┬──────────────┘
+           │ chrome.runtime port      │ HTTP（可选）
+           ▼                          ▼
+┌──────────────────────┐   ┌──────────────────────────┐
+│ background (MV3 SW)  │   │ companion (Node, 可选)   │
+│  · DeepSeek 流式调用 │   │  · 127.0.0.1:8787        │
+│  · 截图 + 裁剪       │   │  · 落盘 JSON / Markdown  │
+│  · 消息路由          │   └───────────┬──────────────┘
+└──────────┬───────────┘               │
+           ▼                           ▼
+   api.deepseek.com        %USERPROFILE%\Documents\video-tutor\
+                                           │
+                                           ▼
+                                  DSH 技能 video-notes
+```
+
+原则：
+
+- **扩展独立可用**：companion 没开，实时问答照常，只是不同步。
+- **数据格式先定死**：第一周就按最终格式存，第二周接 DSH 不返工。
+- **不碰视频流**：只拿字幕和暂停帧，规避下载/版权问题。
+
+---
+
+## 4. 组件与职责
+
+### 4.1 扩展（MV3）
+
+**manifest 权限（初稿）**
+
+```json
+{
+  "manifest_version": 3,
+  "permissions": ["storage", "unlimitedStorage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [{
+    "matches": ["https://www.bilibili.com/video/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "commands": {
+    "ask": {
+      "suggested_key": { "default": "Alt+Q" },
+      "description": "暂停并提问"
+    }
+  }
+}
+```
+
+**content script**
+
+- 检测页面：`location.href` 里的 `BV...`；SPA 路由变化要重新初始化（监听 `pushState` / `popstate`）。
+- 取元数据：内容脚本在隔离世界读不到页面的 `__INITIAL_STATE__`；background 用 `chrome.scripting.executeScript({ world: "MAIN" })` 读取 aid/bvid/cid/title/owner/duration/pages 并回传。直连 `x/web-interface/view` 带 `Origin: chrome-extension://` 会被 B 站 412，只作兜底。
+- 字幕：`x/player/v2?aid=&cid=` → `subtitle.subtitles[]` → `subtitle_url` → JSON `body[{from,to,content}]`。带 `credentials: 'include'`。
+- 面板：`Shadow DOM` 挂到 `<body>`，固定右侧居中；按钮 44px；面板 380×560；`z-index` 顶格；全屏时仍可见。
+- 互动：点球展开/收起；`Alt+Q` 暂停并打开；点时间戳 `video.currentTime = t`。
+
+**background service worker**
+
+- `deepseek.ts`：`POST https://api.deepseek.com/chat/completions`，`stream: true`，解析 SSE，通过 port 把 chunk 推回页面。
+- `screenshot.ts`：`chrome.tabs.captureVisibleTab` → 按视频 `getBoundingClientRect()` 裁剪 → 缩到宽 ≤798 → JPEG 0.8 → dataURL。
+- `index.ts`：消息路由 + 端口保活（问答期间保持 port 打开，避免 SW 被回收）。
+
+**面板 UI**
+
+- 三个页签：**问答 / 大纲 / 标记**。
+- 回答用 `marked` 渲染、`DOMPurify` 清洗；`[12:35]` 正则替换成可点击链接。
+- 底部输入框 + 发送；顶部状态（已预习 / 预习中 / 无字幕）。
+
+### 4.2 companion（第二周，可选）
+
+- `node companion/server.mjs`，Node 20+，**零依赖**，只监听 `127.0.0.1:8787`。
+- 接口：
+  - `GET /health`
+  - `GET /api/videos` 列表
+  - `GET /api/videos/:bvid`
+  - `PUT /api/videos/:bvid` 覆盖写入
+- 落盘：`videos/<bvid>.json` + `videos/<bvid>.md`，默认目录 `%USERPROFILE%\Documents\video-tutor\`，可用 `--dir` 改。
+- CORS 只允许 `chrome-extension://*`；不接受局域网访问。
+
+### 4.3 DSH 技能
+
+- 目录：`.dsh/skills/video-notes/`（项目级）。
+- `SKILL.md` 写明：何时用、数据目录、如何搜索、如何引用时间戳。
+- `scripts/search.mjs "<query>"`：扫 JSON，匹配标题/UP/讲稿/问答，输出前 5 条（bvid、标题、命中时间戳、摘要）。
+- 典型用法：
+  - 「上次那个讲 XX 的视频讲了什么」→ 搜索 → 读 `.md` → 总结
+  - 「12:30 那段再展开」→ 读该视频 segments → 回答
+  - 「根据这个视频出 3 道题」→ 读大纲和讲稿 → 出题
+
+---
+
+## 5. 数据模型
+
+### 5.0 多 P 修正（D1 实测）
+
+样本 `BV1sHU9BmEne` 是 **185 P** 的合集（每 P 5–15 分钟，总长 51.6 小时）。数据必须按 **bvid + p + cid** 存，不能只按 bvid：
+
+- `videos/<bvid>/course.json`：课程元数据 + `pages[]`（p、cid、part、duration），来自 MAIN world 的 `__INITIAL_STATE__`。
+- `videos/<bvid>/p<page>.json`：该 P 的字幕、大纲、问答、标记。
+- 全局大纲优先用 B 站现成的 185 个分 P 标题（免费、准确）；每个 P 内再生成 3–8 段小纲。
+- DSH 技能跨 P 搜索时按 `bvid + p` 返回，并附「第 N P」与课程标题。
+
+### 5.1 JSON
+
+```json
+{
+  "schema": 1,
+  "bvid": "BV1sHU9BmEne",
+  "p": 2,
+  "partTitle": "02. Python启航-初识Python",
+  "pageCount": 185,
+  "cid": 39525878466,
+  "aid": 115610906266258,
+  "title": "黑马程序员Python+AI零基础入门到大神全套视频课程，覆盖Python核心语法、AI应用、数据分析及Web应用等python实战项目开发全流程",
+  "owner": "黑马程序员",
+  "duration": 455,
+  "indexedAt": "2026-11-05T08:00:00+08:00",
+  "subtitle": {
+    "lang": "zh-CN",
+    "source": "bilibili",
+    "segments": [{ "from": 12.3, "to": 15.0, "text": "……" }]
+  },
+  "outline": [
+    { "start": 0, "end": 180, "title": "开场与问题" },
+    { "start": 180, "end": 420, "title": "核心机制" }
+  ],
+  "qa": [
+    {
+      "at": 123.4,
+      "q": "这里说的变化分怎么算？",
+      "a": "…… [02:03] ……",
+      "citations": [123.4],
+      "createdAt": "2026-11-05T08:01:00+08:00"
+    }
+  ],
+  "marks": [
+    { "at": 88.0, "note": "没懂：为什么要拼图", "createdAt": "…" }
+  ]
+}
+```
+
+### 5.2 Markdown
+
+```markdown
+# dsh-see-now v0.1.0插件已发布
+
+- UP：苍穹晓雷
+- 时长：10:56
+- 链接：https://www.bilibili.com/video/BV1QoxX6NEGk/
+- 索引时间：2026-11-05 08:00
+
+## 大纲
+
+- [00:00] 开场与问题
+- [03:00] 核心机制
+
+## 讲稿
+
+- [00:12] ……
+- [00:15] ……
+
+## 问答
+
+### [02:03] 这里说的变化分怎么算？
+
+**问**：……
+
+**答**：…… [02:03] ……
+
+## 标记
+
+- [01:28] 没懂：为什么要拼图
+```
+
+---
+
+## 6. 关键流程
+
+### 6.1 首次打开视频（索引）
+
+1. content script 检测到视频页 → 取 bvid/p；background 从 MAIN world 取 cid/title/owner/duration/pages。
+2. `chrome.storage.local` 查缓存：同一 bvid+p+cid 已索引 → 直接显示「已预习」，跳过。
+3. 拉字幕列表 → 下载字幕 JSON → 转成 segments → 存本地。
+4. 异步生成大纲（文本模型，一次调用）→ 存 `outline` → 显示「预习卡」。
+5. 若 companion 在线 → `PUT` 同步。
+
+**失败处理**
+
+- 字幕列表为空 / `need_login_subtitle` → 标记「无字幕」，提示「只能按画面回答」。
+- 大纲调用失败 → 不阻塞问答，只显示「大纲生成失败，可重试」。
+
+### 6.2 提问
+
+1. 暂停（或 `Alt+Q`）→ 取 `currentTime`。
+2. 组装上下文：全局大纲（压缩）+ 当前时间 ±90 秒字幕 + 最近 2 轮问答 + 可选截图。
+3. 打开 port → background 调 DeepSeek 流式 → chunk 回传 → 面板逐字渲染。
+4. 完成后解析引用 → 生成可点击时间戳 → 存 history + 同步。
+5. 关闭 port。
+
+### 6.3 无字幕视频
+
+- 面板显示「无字幕 · 按画面回答」。
+- 提问时强制带暂停帧；prompt 里说明「没有字幕，只能依据画面，不要编造台词」。
+- 不做大纲。
+
+### 6.4 复习（DSH）
+
+- 用户：「上次那个讲 RAG 的视频说了什么？」
+- DSH 技能：搜索本地 JSON → 找到 bvid → 读 Markdown → 用大纲 + 相关段落回答 → 带时间戳。
+- 追问：「12:30 那段再展开」→ 读 segments 对应区间。
+
+---
+
+## 7. Prompt 设计
+
+### 7.1 大纲（一次性）
+
+```
+你是课程笔记助手。下面是视频《{title}》的完整字幕（带时间戳）。
+请输出 JSON 数组，每项 {start, end, title}，按时间顺序把视频切成 8–15 个主题段。
+title 用 8–16 个汉字，概括这一段在讲什么。只输出 JSON。
+```
+
+### 7.2 问答
+
+System：
+
+```
+你是视频学习助手。只依据给定的字幕片段和画面回答。
+规则：
+1. 先给结论，再解释，中文，简洁。
+2. 每个来自视频的论断后面标注 [mm:ss]（用给定时间戳）。
+3. 视频没讲到的，另起一行以「补充：」开头，与视频内容分开。
+4. 找不到依据就说「视频里没有讲到」，不要编造。
+5. 代码/公式用代码块。
+```
+
+User：
+
+```
+视频：{title}（{duration}）
+全局大纲：
+{outline}
+当前播放：{mm:ss}
+附近字幕（{start}–{end}）：
+[12:30] ……
+[12:35] ……
+最近对话：
+Q: ……
+A: ……
+问题：{question}
+```
+
+有截图时追加一条 image content（base64 dataURL）。
+
+---
+
+## 8. 成本模型
+
+| 项目 | 估算 | 频率 |
+|---|---|---|
+| 索引（1 小时课） | 字幕约 1.2 万 token 输入 + 1 千输出 | 每视频一次，缓存 |
+| 单次问答 | 3–5 千输入 + 0.5–1 千输出 | 每次提问 |
+| 截图 | ≤384 token/张 | 仅画面题 |
+| 视觉预习（可选） | 40–60 张拼图 × 222 token ≈ 9–13k | 每视频一次，默认关 |
+
+- 每月 100 次问答 + 10 个视频索引 ≈ 50 万 token 量级，按 V4-Flash 单价远低于 20 元。
+- 面板显示本次 token 用量；设置页可设每月软上限，超了提示。
+
+---
+
+## 9. 技术风险与验证顺序
+
+| # | 风险 | 影响 | 验证 | 备选 |
+|---|---|---|---|---|
+| 1 | 字幕接口要登录态 / WBI 签名 / CORS；扩展 Origin 直连 API 会 412 | 无字幕则核心体验不成立 | **D2 第一件事** | 页面内（MAIN world）fetch；DOM 兜底；再不行上 ASR（v2） |
+| 2 | `captureVisibleTab` 权限与频率（2 次/秒） | 截不到帧 | D3 | `activeTab` + 快捷键触发；或请求 `<all_urls>`（仅个人用） |
+| 3 | canvas 画 `<video>` 被跨域污染 | 不能直接抽帧 | D3 | 改用屏幕截图 + 裁剪（主方案） |
+| 4 | MV3 SW 30 秒回收 | 长回答中断 | D3 | port 保活；失败自动重试一次 |
+| 5 | B 站 DOM / SPA 路由变动 | 按钮丢失、状态错 | D4 | 用 `__INITIAL_STATE__` 而非 DOM 取数据；监听路由 |
+| 6 | 长视频上下文超限 | 大纲/问答失败 | D5 | 字幕截断 6 万字；按时间窗检索，不整段送 |
+| 7 | 内容脚本隔离世界读不到页面变量 | 取不到 cid/pages | D1 已解决 | background `scripting.executeScript({world:"MAIN"})` |
+
+---
+
+## 10. 两周排期（按每周 6–8 小时）
+
+| 天 | 内容 | 产出 | 验证 |
+|---|---|---|---|
+| D1 ✅ | 脚手架：Vite 8 + TS 7 + MV3，加载未打包扩展 | 悬浮球 + 多 P 识别 + 设置页骨架 | 2026-11-05 构建通过，待 Edge 加载验收 |
+| D2 | **字幕 spike**：拉列表、下载、解析、缓存 | 控制台打印前 10 条字幕 | 3 个视频（有字幕/无字幕/番剧） |
+| D3 | DeepSeek 流式 + 面板问答 + 引用跳转 | 能问第一个问题 | 回答含时间戳且可跳 |
+| D4 | `Alt+Q`、暂停检测、截图裁剪 | 画面题可用 | 问「这页写的什么」 |
+| D5 | 大纲生成 + 预习卡 + 缓存 | 打开即「已预习」 | 30 秒内出大纲 |
+| D6 | companion + 同步 + Markdown 导出 | 文件落盘 | 目录里出现 json/md |
+| D7 | DSH 技能 + 复习流程 | 在 DSH 里搜到视频 | 「上次那个…」能答 |
+| D8 | 打磨：设置页、错误态、图标、README | 可交付 | 跑完验收清单 |
+
+**里程碑**
+
+- 第一周结束 = v1.0，扩展可独立使用。
+- 第二周结束 = v1.1，接上 DSH。
+
+---
+
+## 11. 验收清单
+
+- [ ] 打开有字幕的 B 站视频，30 秒内显示「已预习」
+- [ ] 暂停 → 点球 → 提问，5 秒内出首字
+- [ ] 回答至少 1 个时间戳，点击能跳转
+- [ ] 同一视频多轮追问，上下文不丢
+- [ ] 刷新页面后历史还在
+- [ ] 无字幕视频有明确提示，不崩
+- [ ] 关掉 companion，扩展仍可用
+- [ ] 打开 companion，文件落盘，DSH 能搜到
+- [ ] 设置页能改 API Key / 模型 / 预算
+- [ ] 连续问 10 次不触发 SW 回收
+
+---
+
+## 12. 目录结构
+
+```
+video-tutor/
+├─ package.json
+├─ tsconfig.json
+├─ vite.config.ts
+├─ vite.content.config.ts
+├─ public/
+│  ├─ manifest.json
+│  └─ icons/
+├─ src/
+│  ├─ content/
+│  │  ├─ index.ts          # 入口：路由、检测、注入
+│  │  ├─ page.ts           # bvid/cid/标题/视频元素
+│  │  ├─ subtitles.ts      # 字幕抓取与解析
+│  │  ├─ ui.ts             # 悬浮球 + Shadow DOM 面板
+│  │  ├─ capture.ts        # 截图请求与裁剪参数
+│  │  └─ ui.css
+│  ├─ background/
+│  │  ├─ index.ts          # 消息路由 + 端口
+│  │  ├─ deepseek.ts       # 流式调用
+│  │  └─ screenshot.ts     # captureVisibleTab + crop
+│  ├─ shared/
+│  │  ├─ types.ts
+│  │  ├─ storage.ts
+│  │  ├─ prompt.ts
+│  │  └─ time.ts
+│  └─ options/
+│     ├─ index.html
+│     └─ main.ts
+├─ companion/
+│  └─ server.mjs
+├─ dsh-skill/
+│  └─ video-notes/
+│     ├─ SKILL.md
+│     └─ scripts/search.mjs
+└─ docs/
+   └─ plan.md
+```
+
+---
+
+## 13. 决策记录
+
+| 问题 | 回答 |
+|---|---|
+| Q1 目的 | 工具优先，学习顺带 |
+| Q2 平台 | B 站先行；华为云学堂 v2 |
+| Q3 输入 | 字幕为主 + 按需帧；预解析大纲 |
+| Q4 模型/预算 | DeepSeek vision，BYOK，10–20 元/月 |
+| Q5 底子/时间 | 会一点 JS，第一次做扩展；每周 5–8 小时 |
+| Q6 节奏 | 扩展先跑通，数据格式先定，第二周接 DSH |
+| Q7 复习能力 | 搜索 + 总结 + 深挖；出题/卡片后置 |
+| Q8 本地服务 | 接受，做成可选增强 |
+| Q9 视觉预习 | 默认关；可选「按变化拼图」 |
+| Q10 交互 | 悬浮球为主，侧栏可选 |
+| Q11 样本 | 主样本 BV1sHU9BmEne（黑马 Python，185 P，51.6 小时，需登录态字幕）；早期样本 BV1QoxX6NEGk |
+
+---
+
+## 14. 下一步
+
+D1 已完成，等用户加载 `dist` 验收。下一步 **D2 字幕 spike**：先验证登录态下 `x/player/v2` 能否拿到字幕列表，再下载/解析/缓存前 10 条；仍按「做完一步、验证一步」推进。
