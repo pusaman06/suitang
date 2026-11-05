@@ -1,4 +1,4 @@
-import { formatCny, USD_TO_CNY } from '../shared/cost';
+import { formatCny } from '../shared/cost';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../shared/settings';
 import { formatCueTime } from '../shared/subtitles';
 import type { SubtitleResult, VideoMeta } from '../shared/types';
@@ -47,21 +47,21 @@ let lastLedger: UsageLedger | null = null;
 let budgetCny = 0;
 
 function renderBudget(): void {
-  const spentCny = lastLedger ? lastLedger.monthUsd * USD_TO_CNY : 0;
+  const spentCny = lastLedger?.monthCny ?? 0;
   if (budgetCny <= 0) {
     budgetLabel.textContent = '未设置';
     budgetFill.style.width = '0%';
     return;
   }
   const percent = Math.min(100, Math.max(0, (spentCny / budgetCny) * 100));
-  budgetLabel.textContent = `本月 ${formatCny(lastLedger?.monthUsd ?? 0)} / 预算 ¥${budgetCny.toFixed(2)}`;
+  budgetLabel.textContent = `本月 ${formatCny(lastLedger?.monthCny ?? 0)} / 预算 ¥${budgetCny.toFixed(2)}`;
   budgetFill.style.width = `${percent}%`;
 }
 
 function renderUsage(ledger: UsageLedger): void {
   lastLedger = ledger;
-  usageMonth.textContent = formatCny(ledger.monthUsd);
-  usageTotal.textContent = formatCny(ledger.totalUsd);
+  usageMonth.textContent = formatCny(ledger.monthCny);
+  usageTotal.textContent = formatCny(ledger.totalCny);
   renderBudget();
 }
 

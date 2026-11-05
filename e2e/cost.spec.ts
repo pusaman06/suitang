@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { join } from 'node:path';
-import { estimateCostUsd, formatCny, isPeakHour } from '../src/shared/cost';
+import { estimateCostCny, formatCny, isPeakHour } from '../src/shared/cost';
 import type { QaUsage } from '../src/shared/qa';
 import {
   SHOT_DIR,
@@ -75,21 +75,21 @@ test('费用纯函数：时段边界、手算样例、小数格式', () => {
   expect(isPeakHour(Date.UTC(2026, 0, 3, 2, 0))).toBe(false); // 周六
   expect(isPeakHour(Date.UTC(2026, 0, 5, 10, 0))).toBe(false);
 
-  // peak：200 * 0.006 + 800 * 0.30 + 100 * 1.20，再除以 1M。
-  const cost = estimateCostUsd(usage(), Date.UTC(2026, 0, 5, 2, 0));
-  expect(cost).toBeCloseTo(361.2 / 1_000_000, 12);
+  // peak：200 * 0.04 + 800 * 2 + 100 * 8，再除以 1M（单位是元）。
+  const cost = estimateCostCny(usage(), Date.UTC(2026, 0, 5, 2, 0));
+  expect(cost).toBeCloseTo(2408 / 1_000_000, 12);
 
   // 代理缺 cache miss 字段时，把 promptTokens 减 hit 全按 miss 算。
-  const fallback = estimateCostUsd(
+  const fallback = estimateCostCny(
     usage({ cacheMissTokens: 0 }),
     Date.UTC(2026, 0, 5, 2, 0),
   );
   expect(fallback).toBeCloseTo(cost, 12);
 
   expect(formatCny(0)).toBe('¥0.00');
-  expect(formatCny(0.0001)).toBe('¥0.0007');
-  expect(formatCny(0.01)).toBe('¥0.07');
-  expect(formatCny(1)).toBe('¥7.20');
+  expect(formatCny(0.0001)).toBe('¥0.0001');
+  expect(formatCny(0.01)).toBe('¥0.01');
+  expect(formatCny(1)).toBe('¥1.00');
 });
 
 test('回答行显示费用，面板和设置页显示用量', async () => {

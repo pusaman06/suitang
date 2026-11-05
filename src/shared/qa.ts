@@ -140,7 +140,7 @@ export type QaServerMessage =
       citations: number[];
       usage: QaUsage;
       /** 本次估算费用（USD）；0 表示用量缺失或没算出来。 */
-      costUsd: number;
+      costCny: number;
       finishReason: string;
       elapsedMs: number;
       recordId: string;

@@ -1,30 +1,30 @@
 /**
  * 本地用量账本：单键 `usage:ledger`。
- * 只记估算值，跨天/跨月用本地时区；日/月字段与当前时间不一致时归零。
+ * 金额单位是元；只记估算值，跨天/跨月用本地时区，日/月字段与当前时间不一致时归零。
  */
 
 export const USAGE_LEDGER_KEY = 'usage:ledger';
-export const USAGE_SCHEMA = 1;
+export const USAGE_SCHEMA = 2;
 
 export interface UsageLedger {
-  schema: 1;
+  schema: 2;
   /** 本地日期 YYYY-MM-DD。 */
   day: string;
-  dayUsd: number;
+  dayCny: number;
   /** 本地月份 YYYY-MM。 */
   month: string;
-  monthUsd: number;
-  totalUsd: number;
+  monthCny: number;
+  totalCny: number;
   updatedAt: number;
 }
 
 const EMPTY_LEDGER: UsageLedger = {
   schema: USAGE_SCHEMA,
   day: '',
-  dayUsd: 0,
+  dayCny: 0,
   month: '',
-  monthUsd: 0,
-  totalUsd: 0,
+  monthCny: 0,
+  totalCny: 0,
   updatedAt: 0,
 };
 
@@ -57,10 +57,10 @@ function normalizeLedger(raw: unknown): UsageLedger {
   return {
     schema: USAGE_SCHEMA,
     day: textOf(saved.day),
-    dayUsd: amountOf(saved.dayUsd),
+    dayCny: amountOf(saved.dayCny),
     month: textOf(saved.month),
-    monthUsd: amountOf(saved.monthUsd),
-    totalUsd: amountOf(saved.totalUsd),
+    monthCny: amountOf(saved.monthCny),
+    totalCny: amountOf(saved.totalCny),
     updatedAt: typeof saved.updatedAt === 'number' && Number.isFinite(saved.updatedAt) ? saved.updatedAt : 0,
   };
 }
@@ -77,20 +77,20 @@ export async function readLedger(): Promise<UsageLedger> {
 // 问答和大纲可能同时完成，串行化 read-modify-write，避免后写覆盖前写。
 let writeChain: Promise<unknown> = Promise.resolve();
 
-export function recordUsage(usd: number, atMs: number): Promise<UsageLedger> {
+export function recordUsage(cny: number, atMs: number): Promise<UsageLedger> {
   const run = writeChain.then(async () => {
     const current = await readLedger();
     const stamp = Number.isFinite(atMs) ? atMs : Date.now();
     const day = localDay(stamp);
     const month = localMonth(stamp);
-    const amount = Number.isFinite(usd) ? Math.max(0, usd) : 0;
+    const amount = Number.isFinite(cny) ? Math.max(0, cny) : 0;
     const next: UsageLedger = {
       schema: USAGE_SCHEMA,
       day,
-      dayUsd: current.day === day ? current.dayUsd + amount : amount,
+      dayCny: current.day === day ? current.dayCny + amount : amount,
       month,
-      monthUsd: current.month === month ? current.monthUsd + amount : amount,
-      totalUsd: current.totalUsd + amount,
+      monthCny: current.month === month ? current.monthCny + amount : amount,
+      totalCny: current.totalCny + amount,
       updatedAt: stamp,
     };
     await chrome.storage.local.set({ [USAGE_LEDGER_KEY]: next });

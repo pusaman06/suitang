@@ -49,9 +49,9 @@ test('真实 Key：回答带费用，账本与余额都能读出来', async () =
     const ledger = (await options.evaluate(async () => {
       const all = await chrome.storage.local.get(null);
       return all['usage:ledger'] ?? null;
-    })) as { dayUsd?: number; monthUsd?: number } | null;
-    expect(ledger?.dayUsd ?? 0).toBeGreaterThan(0);
-    expect(ledger?.monthUsd ?? 0).toBeGreaterThanOrEqual(ledger?.dayUsd ?? 0);
+    })) as { dayCny?: number; monthCny?: number } | null;
+    expect(ledger?.dayCny ?? 0).toBeGreaterThan(0);
+    expect(ledger?.monthCny ?? 0).toBeGreaterThanOrEqual(ledger?.dayCny ?? 0);
 
     await options.locator('#refresh-balance').click();
     await expect(options.locator('#balance-value')).not.toHaveText('未读取', { timeout: 30_000 });

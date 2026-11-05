@@ -369,8 +369,8 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   /** D10 用量：只显示今日/本月，失败保持上一次的值，不打断输入。 */
   const renderUsage = (ledger: UsageLedger) => {
-    usageLine.textContent = `今日 ${formatCny(ledger.dayUsd)} · 本月 ${formatCny(ledger.monthUsd)}`;
-    usageLine.title = `累计 ${formatCny(ledger.totalUsd)}；点击刷新`;
+    usageLine.textContent = `今日 ${formatCny(ledger.dayCny)} · 本月 ${formatCny(ledger.monthCny)}`;
+    usageLine.title = `累计 ${formatCny(ledger.totalCny)}；点击刷新`;
   };
 
   const refreshUsage = async () => {
@@ -1137,7 +1137,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       case 'qa:done': {
         activeRequestId = '';
         const seconds = (message.elapsedMs / 1000).toFixed(1);
-        const cost = Number.isFinite(message.costUsd) ? message.costUsd : 0;
+        const cost = Number.isFinite(message.costCny) ? message.costCny : 0;
         finishStream(
           message.text,
           `${message.usage.totalTokens} tokens · ${seconds}s · ≈${formatCny(cost)}`,

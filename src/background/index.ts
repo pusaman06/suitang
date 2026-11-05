@@ -68,7 +68,7 @@ import {
   type AsrTranscribeResponse,
 } from '../shared/asr';
 import { appendQaRecord, clearQaStore, readQaStore } from '../shared/qa-store';
-import { estimateCostUsd } from '../shared/cost';
+import { estimateCostCny } from '../shared/cost';
 import { readLedger, recordUsage } from '../shared/usage-store';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
@@ -858,7 +858,7 @@ async function generateFrameOutline(
     },
   });
   // 抽帧大纲也是一次 DeepSeek 调用，成功即记一笔；记账失败不影响大纲。
-  await recordUsage(estimateCostUsd(result.usage, startedAt), startedAt).catch(error =>
+  await recordUsage(estimateCostCny(result.usage, startedAt), startedAt).catch(error =>
     log('frame outline usage failed', error),
   );
 
@@ -992,7 +992,7 @@ async function generateOutline(
         if (kind === 'answer') text += chunk;
       },
     });
-    await recordUsage(estimateCostUsd(result.usage, startedAt), startedAt).catch(error =>
+    await recordUsage(estimateCostCny(result.usage, startedAt), startedAt).catch(error =>
       log('outline usage failed', error),
     );
 
@@ -1169,9 +1169,9 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
     text = result.text;
     reasoning = result.reasoning;
     const usage: QaUsage = result.usage;
-    const costUsd = estimateCostUsd(usage, startedAt);
+    const costCny = estimateCostCny(usage, startedAt);
     // 只要模型调用返回了 usage 就记账，空回答/解析失败也已经消耗 token。
-    await recordUsage(costUsd, startedAt).catch(error => log('qa usage failed', error));
+    await recordUsage(costCny, startedAt).catch(error => log('qa usage failed', error));
 
     if (text.trim() === '') {
       postToPort(port, {
@@ -1202,7 +1202,7 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       reasoning,
       citations,
       usage,
-      costUsd,
+      costCny,
       finishReason: result.finishReason,
       elapsedMs: Date.now() - startedAt,
       recordId: record.id,
