@@ -42,7 +42,7 @@
 | D2 字幕 | ✅ 完成 | e2e 绿，346 条字幕；「拉到别的视频」的校验已加 |
 | D3 问答 | ✅ 完成 | 2026-11-05 真实 Key 跑通：首字 1.0s、引用可跳；补上全局问题（全片抽稀字幕 + 大纲）和 2 轮追问历史；切片 2 已落 `qa:<bvid>:<p>`，刷新后历史还在 |
 | D4 画面 | ✅ 完成 | 2026-11-05 真实 Key 验证：2.7s 读出「ChatGPT (2022.11.30)」；截图时已隐藏弹幕 |
-| D5 大纲 | ✅ 完成 | 2026-11-05 真实 Key：891s 视频 4.6s 出 9 段，覆盖 0–891s |
+| D5 大纲 | ✅ 完成 | 2026-11-05 真实 Key：891s 视频 4.6s 出 9 段，覆盖 0–891s；无字幕无章节时抽 6 帧出 5–6 段（8s） |
 | D6 落盘 | ✅ 完成 | 2026-11-05 companion 零依赖落盘 + 扩展队列；`data/` 已在 .gitignore |
 | D7 DSH 技能 | ✅ 完成 | 2026-11-05 建 `video-tutor` 技能，用真实同步数据验证 `list` / `show` |
 | D8 打磨 | 🔄 部分完成 | 设置页字段、错误文案、验收清单已做；图标 / README / 预算未做 |
@@ -87,11 +87,11 @@
 ### D5 大纲 ✅
 
 - **目标**：打开视频就知道它分几块。
-- **交付**：点「生成大纲」一次文本调用，按时长自适应 3–15 段 `{start, end, title}`，缓存到 `outline:<bvid>:<p>:<cid>`，面板内折叠区，点段跳转保持暂停。
-- **验收**：`pnpm e2e` 25 条绿；真实 Key 在 P1（891s）生成 9 段、4.6s，0–891s 首尾相接；截图 `e2e/screenshots/d5-real.png`。
-- **怎么复跑**：`$env:DS_KEY='sk-...'; pnpm exec playwright test e2e/real-outline.spec.ts`（没有 Key 时自动跳过）。
-- **踩过的坑**：真实模型把 `start/end` 写成 `"10:32"` 字符串，`Number()` 得到 NaN，整份大纲被判坏格式（`e967cf4` 修：`toSeconds()` 兼容 mm:ss，prompt 也要求整数秒）。
-- **还欠**：并发生成复用 Promise 没有 e2e；无字幕时点生成的错误提示没单独测；真实长视频 8–15 段只覆盖了纯函数。
+- **交付**：点「生成大纲」一次文本调用，按时长自适应 3–15 段 `{start, end, title}`，缓存到 `outline:<bvid>:<p>:<cid>`，面板内折叠区，点段跳转保持暂停。三级兜底：字幕 → UP 章节（`view_points`，不调模型）→ 抽帧（6/8/10 帧，`detail: low`，视觉模型 `frames-vision`）。
+- **验收**：`pnpm e2e` 38 条绿；真实 Key 在 P1（891s）生成 9 段、4.6s，0–891s 首尾相接（`d5-real.png`）；`BV1XnxP6vEdX`（55s、无字幕无章节）抽 6 帧生成 5–6 段、6.5–8s（`d5-frames-real.png`）。
+- **怎么复跑**：`$env:DS_KEY='sk-...'; pnpm exec playwright test e2e/real-outline.spec.ts e2e/real-frames.spec.ts`（没有 Key 时自动跳过）。
+- **踩过的坑**：真实模型把 `start/end` 写成 `"10:32"` 字符串，`Number()` 得到 NaN，整份大纲被判坏格式（`e967cf4` 修：`toSeconds()` 兼容 mm:ss，prompt 也要求整数秒）；42 分钟视频被切成 27 段，超上限整份判坏（`60b56e5` 修：`coalesceSegments` 均匀合并）。
+- **还欠**：抽帧会 seek，画面会跳几秒；6/8 帧档位没有单测；抓帧中途切 P 的中止路径没有 e2e。
 
 ### D6 落盘 + companion
 
