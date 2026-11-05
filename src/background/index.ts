@@ -495,6 +495,7 @@ async function generateOutline(
 
     const segments = parseOutline(raw, request.duration, prompt.range);
     if (!segments) {
+      log('outline raw output', raw.slice(0, 1500));
       throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
     }
 

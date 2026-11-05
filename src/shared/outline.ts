@@ -99,11 +99,29 @@ export function compactCuesForOutline(
   if (total <= budget) return lines;
 
   const step = Math.ceil(total / budget);
-  return lines.filter((_, index) => index % step === 0);
+  const picked = lines.filter((_, index) => index % step === 0);
+  // 抽稀不能把最后一行丢掉：末段要靠它补到片尾，否则大纲尾部会缺一块。
+  const tail = lines[lines.length - 1];
+  if (picked[picked.length - 1] !== tail) picked.push(tail);
+  return picked;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * 模型经常照着字幕行的 mm:ss 格式写时间，这里两种都认：
+ * 纯数字按秒，`10:32` / `1:02:03` 按时分秒换算。解析不了返回 NaN。
+ */
+export function toSeconds(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : Number.NaN;
+  if (typeof value !== 'string') return Number.NaN;
+  const text = value.trim();
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Number(text);
+  const match = /^(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})$/.exec(text);
+  if (!match) return Number.NaN;
+  return Number(match[1] ?? 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
 }
 
 /**
@@ -134,8 +152,8 @@ export function parseOutline(
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue;
     const raw = item as Record<string, unknown>;
-    const start = Number(raw.start);
-    const end = Number(raw.end);
+    const start = toSeconds(raw.start);
+    const end = toSeconds(raw.end);
     const title = typeof raw.title === 'string' ? raw.title.trim() : String(raw.title ?? '').trim();
     if (!Number.isFinite(start) || !Number.isFinite(end) || title === '' || start >= end) continue;
 

@@ -20,6 +20,7 @@ export function outlineSystemPrompt(range: OutlineRange, title: string): string 
   return [
     `你是课程笔记助手。下面是视频《${title}》的完整字幕（带时间戳）。`,
     `请输出 JSON 数组，每项 {start, end, title}，按时间顺序把视频切成 ${range.min}–${range.max} 个主题段。`,
+    'start 和 end 必须是整数秒（例如 2 分 5 秒写 125），不要写 "02:05" 这种时间戳。',
     'title 用 8–16 个汉字，概括这一段在讲什么。',
     '硬约束：',
     '1. 按时间顺序首尾相接覆盖全片：首段 start=0，末段 end ≥ 视频时长。',

@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { join } from 'node:path';
-import { mergeCuesByWindow, parseOutline, segmentRange } from '../src/shared/outline';
+import { mergeCuesByWindow, parseOutline, segmentRange, toSeconds } from '../src/shared/outline';
 import {
   SHOT_DIR,
   VIDEO_URL,
@@ -175,6 +175,30 @@ test('parseOutline 段数不足或 JSON 坏掉时返回 null', () => {
   expect(
     parseOutline('[{"start":0,"end":100,"title":"只有一段"}]', 400, { min: 3, max: 6 }),
   ).toBeNull();
+});
+
+test('toSeconds 认整数秒，也认模型常写的 mm:ss 和 h:mm:ss', () => {
+  expect(toSeconds(125)).toBe(125);
+  expect(toSeconds('125')).toBe(125);
+  expect(toSeconds('02:05')).toBe(125);
+  expect(toSeconds('2:05')).toBe(125);
+  expect(toSeconds('1:02:03')).toBe(3723);
+  expect(Number.isNaN(toSeconds('abc'))).toBe(true);
+  expect(Number.isNaN(toSeconds(null))).toBe(true);
+  // 真实模型输出了 mm:ss 字符串，这一步曾经让整份大纲被判成坏格式。
+  expect(
+    parseOutline(
+      '[{"start":"00:00","end":"02:05","title":"开场"},' +
+        '{"start":"02:05","end":"05:10","title":"环境"},' +
+        '{"start":"05:10","end":"08:00","title":"语法"}]',
+      480,
+      { min: 3, max: 6 },
+    ),
+  ).toEqual([
+    { start: 0, end: 125, title: '开场' },
+    { start: 125, end: 310, title: '环境' },
+    { start: 310, end: 480, title: '语法' },
+  ]);
 });
 
 test('点生成后出现分段，点第 2 段跳到该段起点；再次打开面板走缓存', async () => {
