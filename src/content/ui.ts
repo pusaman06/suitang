@@ -1,6 +1,8 @@
 import styleText from './ui.css?inline';
 import type { AsrError, AsrProgress, AsrResult } from '../shared/asr';
 import { formatTimestamp, renderAnswerHtml } from '../shared/citations';
+import { formatCny } from '../shared/cost';
+import type { UsageLedger } from '../shared/usage-store';
 import {
   outlineFrameTimes,
   type Outline,
@@ -83,6 +85,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       </section>
       <div class="vt-status">就绪</div>
       <button class="vt-sync" type="button" title="点击手动重试同步">同步检查中…</button>
+      <button class="vt-usage" type="button" title="点击刷新用量">今日 ≈¥0.00</button>
       <div class="vt-history-head" hidden>
         <button class="vt-clear" type="button">清空记录</button>
       </div>
@@ -119,6 +122,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const status = must<HTMLElement>(shadow, '.vt-status');
   const syncLine = must<HTMLButtonElement>(shadow, '.vt-sync');
+  const usageLine = must<HTMLButtonElement>(shadow, '.vt-usage');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
   const historyHead = must<HTMLElement>(shadow, '.vt-history-head');
   const clearHistory = must<HTMLButtonElement>(shadow, '.vt-clear');
@@ -267,6 +271,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       void loadOutline();
       void loadQaHistory();
       void refreshSync();
+      void refreshUsage();
       startSyncPolling();
     } else {
       stopSyncPolling();
@@ -360,6 +365,28 @@ export function mountUi(info: VideoInfo): UiHandle {
       .finally(() => {
         syncBusy = false;
       });
+  });
+
+  /** D10 用量：只显示今日/本月，失败保持上一次的值，不打断输入。 */
+  const renderUsage = (ledger: UsageLedger) => {
+    usageLine.textContent = `今日 ${formatCny(ledger.dayUsd)} · 本月 ${formatCny(ledger.monthUsd)}`;
+    usageLine.title = `累计 ${formatCny(ledger.totalUsd)}；点击刷新`;
+  };
+
+  const refreshUsage = async () => {
+    try {
+      const response = (await chrome.runtime.sendMessage({ type: 'usage:get' })) as
+        | { ok?: boolean; ledger?: UsageLedger }
+        | undefined;
+      if (response?.ok && response.ledger) renderUsage(response.ledger);
+    } catch {
+      // 用量只是辅助信息，读不到就保持现状。
+    }
+  };
+
+  usageLine.addEventListener('click', () => {
+    usageLine.textContent = '刷新中…';
+    void refreshUsage();
   });
 
   /** 截图时藏起会入镜的东西：弹幕总是藏；面板只有压住画面时才藏，免得闪一下。 */
@@ -1110,14 +1137,21 @@ export function mountUi(info: VideoInfo): UiHandle {
       case 'qa:done': {
         activeRequestId = '';
         const seconds = (message.elapsedMs / 1000).toFixed(1);
-        finishStream(message.text, `${message.usage.totalTokens} tokens · ${seconds}s`);
+        const cost = Number.isFinite(message.costUsd) ? message.costUsd : 0;
+        finishStream(
+          message.text,
+          `${message.usage.totalTokens} tokens · ${seconds}s · ≈${formatCny(cost)}`,
+        );
         const scope = lastWindow?.noSubtitle ? ' · 无字幕 · 只能按标题回答' : '';
         status.textContent = `完成 · ${message.usage.totalTokens} tokens${scope}`;
         setBusy(false);
         // 这一轮已经落库，下次打开面板能看到「清空记录」。
         historyHead.hidden = false;
         // 入队/flush 是后台异步的，稍等再看状态。
-        window.setTimeout(() => void refreshSync(), 600);
+        window.setTimeout(() => {
+          void refreshSync();
+          void refreshUsage();
+        }, 600);
         return;
       }
       case 'qa:error': {

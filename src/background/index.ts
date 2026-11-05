@@ -68,6 +68,8 @@ import {
   type AsrTranscribeResponse,
 } from '../shared/asr';
 import { appendQaRecord, clearQaStore, readQaStore } from '../shared/qa-store';
+import { estimateCostUsd } from '../shared/cost';
+import { readLedger, recordUsage } from '../shared/usage-store';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
 
@@ -842,6 +844,7 @@ async function generateFrameOutline(
   if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
 
   let text = '';
+  const startedAt = Date.now();
   const result = await callDeepSeek({
     apiKey: settings.apiKey,
     baseUrl: settings.apiBaseUrl,
@@ -854,6 +857,10 @@ async function generateFrameOutline(
       if (kind === 'answer') text += chunk;
     },
   });
+  // 抽帧大纲也是一次 DeepSeek 调用，成功即记一笔；记账失败不影响大纲。
+  await recordUsage(estimateCostUsd(result.usage, startedAt), startedAt).catch(error =>
+    log('frame outline usage failed', error),
+  );
 
   const raw = text.trim() !== '' ? text : result.text;
   if (raw.trim() === '') {
@@ -972,6 +979,7 @@ async function generateOutline(
     if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
 
     let text = '';
+    const startedAt = Date.now();
     const result = await callDeepSeek({
       apiKey: settings.apiKey,
       baseUrl: settings.apiBaseUrl,
@@ -984,6 +992,9 @@ async function generateOutline(
         if (kind === 'answer') text += chunk;
       },
     });
+    await recordUsage(estimateCostUsd(result.usage, startedAt), startedAt).catch(error =>
+      log('outline usage failed', error),
+    );
 
     const raw = text.trim() !== '' ? text : result.text;
     if (raw.trim() === '') {
@@ -1158,6 +1169,9 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
     text = result.text;
     reasoning = result.reasoning;
     const usage: QaUsage = result.usage;
+    const costUsd = estimateCostUsd(usage, startedAt);
+    // 只要模型调用返回了 usage 就记账，空回答/解析失败也已经消耗 token。
+    await recordUsage(costUsd, startedAt).catch(error => log('qa usage failed', error));
 
     if (text.trim() === '') {
       postToPort(port, {
@@ -1188,6 +1202,7 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       reasoning,
       citations,
       usage,
+      costUsd,
       finishReason: result.finishReason,
       elapsedMs: Date.now() - startedAt,
       recordId: record.id,
@@ -1274,6 +1289,48 @@ chrome.commands.onCommand.addListener(command => {
   });
 });
 
+interface DeepSeekBalance {
+  currency?: string;
+  total_balance?: string;
+  granted_balance?: string;
+  topped_up_balance?: string;
+}
+
+async function fetchDeepSeekBalance(
+  apiKey: string,
+): Promise<{ ok: true; balances: DeepSeekBalance[] } | { ok: false; message: string }> {
+  if (!apiKey.trim()) return { ok: false, message: '还没填 DeepSeek Key' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch('https://api.deepseek.com/user/balance', {
+      headers: { Authorization: `Bearer ${apiKey.trim()}` },
+      signal: controller.signal,
+    });
+    const body = (await response.json().catch(() => null)) as
+      | { balance_infos?: DeepSeekBalance[]; error?: { message?: string } }
+      | null;
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: body?.error?.message ?? `余额接口返回 ${response.status}`,
+      };
+    }
+    return { ok: true, balances: Array.isArray(body?.balance_infos) ? body.balance_infos : [] };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error && error.name === 'AbortError'
+        ? '余额请求超时'
+        : error instanceof Error
+          ? error.message
+          : '读取余额失败',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'ping') {
     sendResponse({
@@ -1281,6 +1338,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       version: chrome.runtime.getManifest().version,
       at: Date.now(),
     });
+    return true;
+  }
+
+  if (message?.type === 'usage:get') {
+    void readLedger()
+      .then(ledger => sendResponse({ ok: true, ledger }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '读取用量失败',
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'usage:balance') {
+    void loadSettings()
+      .then(settings => fetchDeepSeekBalance(settings.apiKey))
+      .then(result => sendResponse(result))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '读取余额失败',
+        }),
+      );
     return true;
   }
 

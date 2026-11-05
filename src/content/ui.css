@@ -380,6 +380,24 @@
   color: #e08a8a;
 }
 
+.vt-usage {
+  display: block;
+  width: 100%;
+  margin: -3px 0 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #6f7890;
+  font: inherit;
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-usage:hover {
+  color: #9aa4bd;
+}
+
 .vt-answers {
   display: grid;
   gap: 10px;

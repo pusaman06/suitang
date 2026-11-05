@@ -1,6 +1,8 @@
+import { formatCny, USD_TO_CNY } from '../shared/cost';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../shared/settings';
 import { formatCueTime } from '../shared/subtitles';
 import type { SubtitleResult, VideoMeta } from '../shared/types';
+import type { UsageLedger } from '../shared/usage-store';
 
 const apiKey = el<HTMLInputElement>('#api-key');
 const visionModel = el<HTMLInputElement>('#vision-model');
@@ -13,6 +15,14 @@ const jumpAutoPlay = el<HTMLInputElement>('#jump-autoplay');
 const contextWindow = el<HTMLInputElement>('#context-window');
 const maxTokens = el<HTMLInputElement>('#max-tokens');
 const historyTurns = el<HTMLInputElement>('#history-turns');
+const monthlyBudget = el<HTMLInputElement>('#monthly-budget');
+const usageMonth = el<HTMLElement>('#usage-month');
+const usageTotal = el<HTMLElement>('#usage-total');
+const budgetLabel = el<HTMLElement>('#budget-label');
+const budgetFill = el<HTMLElement>('#budget-fill');
+const balanceValue = el<HTMLElement>('#balance-value');
+const balanceStatus = el<HTMLParagraphElement>('#balance-status');
+const refreshBalance = el<HTMLButtonElement>('#refresh-balance');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
 const companionUrl = el<HTMLInputElement>('#companion-url');
 const syncEnabled = el<HTMLInputElement>('#sync-enabled');
@@ -28,6 +38,70 @@ function el<T extends Element>(selector: string): T {
   return node;
 }
 
+interface BalanceInfo {
+  currency?: string;
+  total_balance?: string;
+}
+
+let lastLedger: UsageLedger | null = null;
+let budgetCny = 0;
+
+function renderBudget(): void {
+  const spentCny = lastLedger ? lastLedger.monthUsd * USD_TO_CNY : 0;
+  if (budgetCny <= 0) {
+    budgetLabel.textContent = '未设置';
+    budgetFill.style.width = '0%';
+    return;
+  }
+  const percent = Math.min(100, Math.max(0, (spentCny / budgetCny) * 100));
+  budgetLabel.textContent = `本月 ${formatCny(lastLedger?.monthUsd ?? 0)} / 预算 ¥${budgetCny.toFixed(2)}`;
+  budgetFill.style.width = `${percent}%`;
+}
+
+function renderUsage(ledger: UsageLedger): void {
+  lastLedger = ledger;
+  usageMonth.textContent = formatCny(ledger.monthUsd);
+  usageTotal.textContent = formatCny(ledger.totalUsd);
+  renderBudget();
+}
+
+async function loadUsage(): Promise<void> {
+  try {
+    const response = (await chrome.runtime.sendMessage({ type: 'usage:get' })) as
+      | { ok?: boolean; ledger?: UsageLedger; message?: string }
+      | undefined;
+    if (response?.ok && response.ledger) renderUsage(response.ledger);
+  } catch {
+    // 用量读取失败不影响设置保存。
+  }
+}
+
+async function loadBalance(): Promise<void> {
+  refreshBalance.disabled = true;
+  balanceStatus.textContent = '读取中…';
+  try {
+    const response = (await chrome.runtime.sendMessage({ type: 'usage:balance' })) as
+      | { ok?: boolean; balances?: BalanceInfo[]; message?: string }
+      | undefined;
+    if (!response?.ok) {
+      balanceStatus.textContent = response?.message ?? '读取余额失败';
+      return;
+    }
+    const infos = response.balances ?? [];
+    balanceValue.textContent =
+      infos.length === 0
+        ? '暂无余额信息'
+        : infos
+            .map(info => `${info.currency ?? 'CNY'} ${info.total_balance ?? '0.00'}`)
+            .join(' / ');
+    balanceStatus.textContent = '';
+  } catch (error) {
+    balanceStatus.textContent = `读取余额失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    refreshBalance.disabled = false;
+  }
+}
+
 async function init(): Promise<void> {
   const settings = await loadSettings();
   apiKey.value = settings.apiKey;
@@ -41,11 +115,19 @@ async function init(): Promise<void> {
   contextWindow.value = String(settings.contextWindowSec);
   maxTokens.value = String(settings.maxTokens);
   historyTurns.value = String(settings.historyTurns);
+  budgetCny = settings.monthlyBudgetCny;
+  monthlyBudget.value = settings.monthlyBudgetCny > 0 ? String(settings.monthlyBudgetCny) : '';
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
   companionUrl.value =
     settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
   syncEnabled.checked = settings.syncEnabled;
+  renderBudget();
+  void loadUsage();
 }
+
+refreshBalance.addEventListener('click', () => {
+  void loadBalance();
+});
 
 save.addEventListener('click', () => {
   void saveSettings({
@@ -60,6 +142,7 @@ save.addEventListener('click', () => {
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
     maxTokens: Number(maxTokens.value) || DEFAULT_SETTINGS.maxTokens,
     historyTurns: Number(historyTurns.value),
+    monthlyBudgetCny: Number(monthlyBudget.value) || 0,
     apiBaseUrl: apiBaseUrl.value.trim(),
     companionUrl: companionUrl.value.trim(),
     syncEnabled: syncEnabled.checked,
@@ -67,6 +150,9 @@ save.addEventListener('click', () => {
     contextWindow.value = String(next.contextWindowSec);
     maxTokens.value = String(next.maxTokens);
     historyTurns.value = String(next.historyTurns);
+    budgetCny = next.monthlyBudgetCny;
+    monthlyBudget.value = next.monthlyBudgetCny > 0 ? String(next.monthlyBudgetCny) : '';
+    renderBudget();
     asrApiKey.value = next.asrApiKey;
     asrModel.value = next.asrModel;
     jumpAutoPlay.checked = next.jumpAutoPlay;

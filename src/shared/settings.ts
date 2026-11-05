@@ -37,6 +37,8 @@ export interface Settings {
   asrBaseUrl: string;
   /** D8 语音转写模型。 */
   asrModel: string;
+  /** D10 月度预算（人民币）；0 表示不设预算。 */
+  monthlyBudgetCny: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrApiKey: '',
   asrBaseUrl: DEFAULT_ASR_BASE_URL,
   asrModel: DEFAULT_ASR_MODEL,
+  monthlyBudgetCny: 0,
 };
 
 /** 旧版本存过退役别名，读出来时归一到现役模型。 */
@@ -98,6 +101,12 @@ function normalizeCompanionUrl(value: unknown): string {
   return normalizeHttpUrl(value, DEFAULT_COMPANION_URL);
 }
 
+function normalizeMoney(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.round(num * 100) / 100;
+}
+
 export function normalizeSettings(patch: Partial<Settings> | undefined | null): Settings {
   const saved = patch ?? {};
   return {
@@ -122,6 +131,8 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
       typeof saved.asrModel === 'string' && saved.asrModel.trim() !== ''
         ? saved.asrModel.trim()
         : DEFAULT_SETTINGS.asrModel,
+    // D10 新增：旧存档没有预算字段时按 0（不设预算）处理。
+    monthlyBudgetCny: normalizeMoney(saved.monthlyBudgetCny),
   };
 }
 

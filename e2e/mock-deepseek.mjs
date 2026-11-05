@@ -140,6 +140,8 @@ export function createMockServer() {
               prompt_tokens: 1234,
               completion_tokens: 56,
               total_tokens: 1290,
+              prompt_cache_hit_tokens: 0,
+              prompt_cache_miss_tokens: 1234,
               prompt_tokens_details: { prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1234 },
               completion_tokens_details: { reasoning_tokens: 0 },
             },
