@@ -44,10 +44,10 @@
 | D4 画面 | ✅ 完成 | 2026-11-05 真实 Key 验证：2.7s 读出「ChatGPT (2022.11.30)」；截图时已隐藏弹幕 |
 | D5 大纲 | ✅ 完成 | 2026-11-05 真实 Key：891s 视频 4.6s 出 9 段，覆盖 0–891s |
 | D6 落盘 | ✅ 完成 | 2026-11-05 companion 零依赖落盘 + 扩展队列；`data/` 已在 .gitignore |
-| D7 DSH 技能 | ⬜ 未开始 | |
+| D7 DSH 技能 | ✅ 完成 | 2026-11-05 建 `video-tutor` 技能，用真实同步数据验证 `list` / `show` |
 | D8 打磨 | ⬜ 未开始 | |
 
-**下一件事**：D7 DSH 技能（读 `data/` 里的 json/md）；或按需补 D3 切片 2（多轮 / 持久化）。
+**下一件事**：D8 打磨（设置页、错误文案、图标、README、验收清单）；或按需补 D3 切片 2（多轮 / 持久化）。
 
 ---
 
@@ -99,11 +99,11 @@
 - **交付**：本地 Node 服务 `127.0.0.1:8787`、每个视频一份 JSON + 一份 Markdown 写到 `D:\project\video-tutor\data\`、扩展侧同步队列（失败不阻塞问答）。
 - **验收**：目录里出现 json / md；关掉 companion 扩展仍能问答。
 
-### D7 DSH 技能
+### D7 DSH 技能 ✅
 
 - **目标**：在 DSH 里复习看过的视频。
-- **交付**：`video-notes` 技能（搜视频、读大纲、按时间戳追问）、文件格式说明。
-- **验收**：DSH 里问「上次那个讲 RAG 的视频说了什么」能给出带时间戳的回答。
+- **交付**：`.dsh/skills/video-tutor/`（`SKILL.md` + `scripts/vt.mjs`，`list` / `show <bvid> [p]` / `search <词>`），零依赖，默认读 `D:\project\video-tutor\data`，可用 `--dir` 或 `VIDEO_TUTOR_DATA` 覆盖。
+- **验收**：2026-11-05 真实起 companion、扩展打开 `BV1sHU9BmEne`，`course.md`/`course.json` 落盘（185 P），技能 `list` / `show` 正确读出。字幕与大纲（`p<N>.md`）要等问过或生成过大纲才落盘——纯打开只同步课程目录。
 
 ### D8 打磨
 
