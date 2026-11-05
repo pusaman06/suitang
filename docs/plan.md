@@ -29,7 +29,7 @@
 ### 1.4 明确不做（v1）
 
 - 华为云学堂等其它平台（v2，用适配器扩展）
-- ASR / 语音转写（无字幕视频只做「按画面回答」）
+- ASR / 语音转写（v2）。v1 无字幕只做「按画面回答」+ 标题兜底；可行路径已由 Bilitato 验证：playurl 取音轨 + offscreen 里 FFmpeg.wasm 切片 + 云 ASR，不需要 companion。详见 §6.5
 - RAG / 向量库（v1 用「大纲 + 时间窗」检索，够用）
 - Chrome 商店发布、移动端、多人协作
 - 下载视频文件（只取字幕 + 暂停帧，不碰视频流）
@@ -270,12 +270,55 @@
 - 面板显示「无字幕 · 按画面回答」。
 - 提问时强制带暂停帧；prompt 里说明「没有字幕，只能依据画面，不要编造台词」。
 - 不做大纲。
+- v2 走 ASR 兜底，见 §6.5。
 
 ### 6.4 复习（DSH）
 
 - 用户：「上次那个讲 RAG 的视频说了什么？」
 - DSH 技能：搜索本地 JSON → 找到 bvid → 读 Markdown → 用大纲 + 相关段落回答 → 带时间戳。
 - 追问：「12:30 那段再展开」→ 读 segments 对应区间。
+
+### 6.5 ASR 兜底（v2）
+
+参考实现：Bilitato v1.6.4.1（`erikzhuang55/Bilitato`），纯扩展内闭环，不用 companion。
+
+**触发判断**
+
+- `need_login_subtitle` → 提示登录，不启动 ASR。
+- 真无字幕 → 面板给「转写」按钮，用户点了才跑（不自动烧钱）。
+- 拉取失败 → 重试，不降级成「无字幕」。
+
+**音频获取**（`background.js:3638` `extractAudioSourceFromTab`）
+
+1. `GET api.bilibili.com/x/player/playurl`，带当前 tab 的 aid/cid，`type=audio`。
+2. 取 `data.dash.audio[0]`（按码率降序，第一条最高）。
+3. 校验返回的 bvid 与当前页一致，不一致直接放弃——防 SPA 切 P 串线。
+4. 降级链：playurl API → content 传来的 audioUrl → `executeScript` 读 `__playinfo__`。
+
+**Referer 坑**
+
+下载 `*.bilivideo.com` 音轨必须带 `Referer: https://www.bilibili.com/`，但 Referer 是 forbidden header，JS 设不了。用 `declarativeNetRequest` 的 `modifyHeaders` 规则改写（`rules.json`），`urlFilter: "bilivideo"`。
+
+**切片**（`offscreen.js`）
+
+- offscreen document 里跑 FFmpeg.wasm（`@ffmpeg/ffmpeg` + `@ffmpeg/core` esm）；manifest 需 `"offscreen"` 权限 + CSP `wasm-unsafe-eval`。
+- 默认 600s/片、重叠 4s、最小 45s；按 `maxBytes × 0.72 / (字节/秒)` 估算安全时长。
+- Groq 用 `-c:a copy` 直切 m4a（快）；限制严的服务转 16k mono mp3。
+- 合并：丢掉 `end <= overlap` 的重复段，相邻同文本合并。
+
+**ASR 服务**
+
+| 服务 | 端点 | 备注 |
+|---|---|---|
+| Groq | `api.groq.com/openai/v1/audio/transcriptions` | whisper-large-v3-turbo，免费 2000 次/天，**国内需梯子** |
+| 硅基流动 | `api.siliconflow.cn/v1/audio/transcriptions` | 国内可达 |
+| 小米 MiMo | `api.xiaomimimo.com/v1/chat/completions` | `input_audio` base64，600s 分片 |
+
+**代价**
+
+- 扩展体积 +30MB 左右（wasm core），首次加载慢几秒。
+- 1 小时视频约 6 片，串行请求 1–3 分钟；结果按 `BVID::CID` 缓存。
+- 失败回退到「按画面回答」，不阻塞。
 
 ---
 
@@ -341,7 +384,7 @@ A: ……
 
 | # | 风险 | 影响 | 验证 | 备选 |
 |---|---|---|---|---|
-| 1 | 字幕接口要登录态 / WBI 签名 / CORS；扩展 Origin 直连 API 会 412 | 无字幕则核心体验不成立 | **D2 第一件事** | 页面内（MAIN world）fetch；DOM 兜底；再不行上 ASR（v2） |
+| 1 | 字幕接口要登录态 / WBI 签名 / CORS；扩展 Origin 直连 API 会 412 | 无字幕则核心体验不成立 | **D2 第一件事** | 页面内（MAIN world）fetch；DOM 兜底；再不行上 ASR（v2，路径已验证：playurl 音轨 + FFmpeg.wasm 切片 + 云 ASR） |
 | 2 | `captureVisibleTab` 权限与频率（2 次/秒） | 截不到帧 | D3 | `activeTab` + 快捷键触发；或请求 `<all_urls>`（仅个人用） |
 | 3 | canvas 画 `<video>` 被跨域污染 | 不能直接抽帧 | D3 | 改用屏幕截图 + 裁剪（主方案） |
 | 4 | MV3 SW 30 秒回收 | 长回答中断 | D3 | port 保活；失败自动重试一次 |
@@ -453,9 +496,10 @@ video-tutor/
 | Q9 视觉预习 | 默认关；可选「按变化拼图」 |
 | Q10 交互 | 悬浮球为主，侧栏可选 |
 | Q11 样本 | 主样本 BV1sHU9BmEne（黑马 Python，185 P，51.6 小时，需登录态字幕）；早期样本 BV1QoxX6NEGk |
+| Q12 ASR | v1 不做；v2 做，纯扩展内（offscreen + FFmpeg.wasm + 云 ASR），不依赖 companion |
 
 ---
 
 ## 14. 下一步
 
-D1 已验收（2026-11-05）；D2 已通过 e2e（2026-11-05，346 条正确字幕，正文断言「零基础学AI」）。下一步 D3：DeepSeek 流式问答 + 引用跳转。
+D1–D3 已完成（2026-11-05）。D3 切片 1 用真实 Key 端到端验证：首字 1.0s、回答带可点 `[00:06]`、跳转成功。下一步 D4：暂停检测 + 截图裁剪，画面题可用。
