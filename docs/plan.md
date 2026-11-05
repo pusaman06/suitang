@@ -515,6 +515,16 @@ video-tutor/
 
 ---
 
-## 14. 下一步
+## 15. 下一步
 
-D1–D6 已完成（2026-11-05）。D3 切片 1 用真实 Key 端到端验证：首字 1.0s、回答带可点 `[00:06]`、跳转成功；切片 2 已补持久化（`qa:<bvid>:<p>`，刷新/重启后历史还在，可一键清空）。D4 用真实 Key 验证：暂停在 12s 问「这页写的什么」，2.7s 答出「ChatGPT (2022.11.30)」并带 `[00:12]`。D5 用真实 Key 验证：891s 的视频 4.6s 生成 9 段，0–891s 首尾相接。D6 落盘走本地 companion：零依赖 Node 服务，扩展侧队列 + 每分钟兜底同步，落 `videos/<bvid>/course.json`、`p<N>.json` 与人读的 `p<N>.md`。下一步 D7 DSH 技能（读 `data/` 里的 json/md）与 D8 剩余打磨。
+D1–D10 已完成（2026-11-05），全部用真实 Key 验证过，`pnpm e2e` 42 passed + 8 skipped。
+
+- D3 流式问答：首字 1.0s、`[00:06]` 可点可跳；切片 2 补了持久化（`qa:<bvid>:<p>`，刷新后还在）与全局问题 + 2 轮追问。
+- D4 画面：暂停在 12s 问「这页写的什么」，2.7s 答出「ChatGPT (2022.11.30)」并带 `[00:12]`；截图时自动隐藏弹幕层。
+- D5 大纲四路兜底：字幕 → UP 章节（秒出）→ ASR → 抽帧；`BV1FW9ZBhEEN` 章节 7 段 5.8s，`BV1XnxP6vEdX` 抽帧 6 段 6.5s。
+- D6 落盘：零依赖 companion，落 `videos/<bvid>/course.json|md`、`p<N>.json|md`。
+- D7 DSH 技能：`.dsh/skills/video-tutor/`，`list` / `show` / `search`。
+- D9 ASR（A 路径）：硅基流动 SenseVoiceSmall，480s → 7.1s / 175 句，无时间戳、按句均分。
+- D10 成本：回答行尾 `≈¥0.0014`，今日/本月账本 + 余额。
+
+**下一步**：把产出接进个人知识库（见 `docs/decisions-notes.md` D1–D12 与「待定」一节）。未做：ASR B 路径（>1h / >45MB 切片）、图标、README、语义搜索。
