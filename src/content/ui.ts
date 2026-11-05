@@ -7,6 +7,7 @@ import {
 } from '../shared/outline';
 import { QA_PORT_NAME, type QaAskPayload, type QaRect, type QaServerMessage, type QaViewport, type QaWindowInfo } from '../shared/qa';
 import { loadSettings, type Settings } from '../shared/settings';
+import type { SyncStatus } from '../shared/sync';
 import type { VideoInfo } from '../shared/types';
 import { getPlaybackTime, getVideoElement, getVisibleVideoRect, seekVideo, setDanmakuHidden } from './page';
 
@@ -59,6 +60,7 @@ export function mountUi(info: VideoInfo): UiHandle {
         </div>
       </section>
       <div class="vt-status">就绪</div>
+      <button class="vt-sync" type="button" title="点击手动重试同步">同步检查中…</button>
       <div class="vt-answers"></div>
       <div class="vt-frame-hint" hidden></div>
       <div class="vt-composer">
@@ -86,6 +88,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const status = must<HTMLElement>(shadow, '.vt-status');
+  const syncLine = must<HTMLButtonElement>(shadow, '.vt-sync');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
@@ -102,6 +105,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   let asking = false;
   let capturing = false;
   let captureTimer = 0;
+  let syncTimer = 0;
+  let syncBusy = false;
 
   const OUTLINE_EMPTY_TEXT = '生成一份大纲，快速了解视频结构。';
   let outline: Outline | null = null;
@@ -137,18 +142,94 @@ export function mountUi(info: VideoInfo): UiHandle {
       input.focus();
       // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
       void loadOutline();
+      void refreshSync();
+      startSyncPolling();
+    } else {
+      stopSyncPolling();
     }
   };
 
   ball.addEventListener('click', toggle);
   close.addEventListener('click', () => {
     panel.hidden = true;
+    stopSyncPolling();
   });
 
   const setFrameHint = (text: string) => {
     frameHint.textContent = text;
     frameHint.hidden = text === '';
   };
+
+  /** D6 同步状态：只显示一行小字，失败不打断问答。 */
+  const renderSyncStatus = (next: SyncStatus) => {
+    syncLine.classList.remove('vt-sync-error');
+    if (!next.enabled) {
+      syncLine.textContent = '同步已关闭';
+      syncLine.title = '在设置页开启本地落盘同步';
+      return;
+    }
+    if (next.pending > 0) {
+      syncLine.textContent = `待同步 ${next.pending} 条`;
+      syncLine.title = '点击手动重试同步';
+      return;
+    }
+    if (next.failed > 0) {
+      syncLine.textContent = `同步失败 ${next.failed} 条`;
+      syncLine.title = '点击重试；仍然失败请检查 companion';
+      syncLine.classList.add('vt-sync-error');
+      return;
+    }
+    if (next.lastError) {
+      syncLine.textContent = 'companion 未连接';
+      syncLine.title = `${next.lastError}；点击重试`;
+      syncLine.classList.add('vt-sync-error');
+      return;
+    }
+    syncLine.textContent = '已同步';
+    syncLine.title = next.url;
+  };
+
+  const refreshSync = async () => {
+    try {
+      const response = (await chrome.runtime.sendMessage({ type: 'sync:status' })) as
+        | SyncStatus
+        | undefined;
+      if (response) renderSyncStatus(response);
+    } catch {
+      syncLine.textContent = '同步状态未知';
+      syncLine.classList.add('vt-sync-error');
+    }
+  };
+
+  const stopSyncPolling = () => {
+    if (syncTimer !== 0) {
+      window.clearInterval(syncTimer);
+      syncTimer = 0;
+    }
+  };
+
+  const startSyncPolling = () => {
+    stopSyncPolling();
+    syncTimer = window.setInterval(() => {
+      if (!panel.hidden) void refreshSync();
+    }, 5000);
+  };
+
+  syncLine.addEventListener('click', () => {
+    if (syncBusy) return;
+    syncBusy = true;
+    syncLine.textContent = '同步中…';
+    void chrome.runtime
+      .sendMessage({ type: 'sync:flush' })
+      .then(() => refreshSync())
+      .catch(() => {
+        syncLine.textContent = '同步失败';
+        syncLine.classList.add('vt-sync-error');
+      })
+      .finally(() => {
+        syncBusy = false;
+      });
+  });
 
   /** 截图时把悬浮球、面板和弹幕藏起来，免得截进画面；收到 qa:start / 报错就恢复。 */
   const setCapturing = (on: boolean) => {
@@ -375,6 +456,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       clearOutlineError();
       outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
       renderOutline();
+      window.setTimeout(() => void refreshSync(), 600);
     } catch (error) {
       if (outlineInfoKey(currentInfo) !== key) return;
       outlineGenerating = false;
@@ -543,6 +625,8 @@ export function mountUi(info: VideoInfo): UiHandle {
         const scope = lastWindow?.noSubtitle ? ' · 无字幕 · 只能按标题回答' : '';
         status.textContent = `完成 · ${message.usage.totalTokens} tokens${scope}`;
         setBusy(false);
+        // 入队/flush 是后台异步的，稍等再看状态。
+        window.setTimeout(() => void refreshSync(), 600);
         return;
       }
       case 'qa:error': {
@@ -678,7 +762,10 @@ export function mountUi(info: VideoInfo): UiHandle {
   });
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') panel.hidden = true;
+    if (event.key === 'Escape') {
+      panel.hidden = true;
+      stopSyncPolling();
+    }
   };
   document.addEventListener('keydown', onKeyDown);
 
@@ -693,6 +780,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       document.removeEventListener('pause', onPlayPause, true);
       document.removeEventListener('timeupdate', onOutlineTimeupdate, true);
       document.removeEventListener('seeked', onOutlineSeeked, true);
+      stopSyncPolling();
       window.clearTimeout(initialSync);
       if (captureTimer !== 0) window.clearTimeout(captureTimer);
       if (paintTimer !== 0) window.clearTimeout(paintTimer);

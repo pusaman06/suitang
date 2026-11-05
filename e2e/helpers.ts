@@ -30,6 +30,8 @@ export async function launchWithExtension(): Promise<BrowserContext> {
     args: [
       `--disable-extensions-except=${EXTENSION_PATH}`,
       `--load-extension=${EXTENSION_PATH}`,
+      // D6：允许扩展从页面访问 127.0.0.1 的 companion。
+      '--disable-features=BlockInsecurePrivateNetworkRequests',
     ],
   });
 }

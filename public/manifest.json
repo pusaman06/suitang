@@ -3,7 +3,7 @@
   "name": "Video Tutor",
   "version": "0.1.0",
   "description": "在 B 站看课时暂停提问：字幕 + 画面 + 时间戳。",
-  "permissions": ["storage", "unlimitedStorage", "scripting"],
+  "permissions": ["storage", "unlimitedStorage", "scripting", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [

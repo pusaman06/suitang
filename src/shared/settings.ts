@@ -5,6 +5,7 @@
 
 export const SETTINGS_STORAGE_KEY = 'settings';
 export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com';
+export const DEFAULT_COMPANION_URL = 'http://127.0.0.1:8787';
 
 export interface Settings {
   apiKey: string;
@@ -22,6 +23,10 @@ export interface Settings {
   jumpAutoPlay: boolean;
   /** 提问时是否附带当前视频画面截图。 */
   frameEnabled: boolean;
+  /** D6 本地 companion 地址；末尾不带斜杠。 */
+  companionUrl: string;
+  /** D6 是否开启本地落盘同步。 */
+  syncEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +39,8 @@ export const DEFAULT_SETTINGS: Settings = {
   contextWindowSec: 90,
   jumpAutoPlay: false,
   frameEnabled: true,
+  companionUrl: DEFAULT_COMPANION_URL,
+  syncEnabled: true,
 };
 
 /** 旧版本存过退役别名，读出来时归一到现役模型。 */
@@ -61,6 +68,18 @@ function normalizeBaseUrl(value: unknown): string {
   return raw.replace(/\/+$/, '');
 }
 
+function normalizeCompanionUrl(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw === '') return DEFAULT_COMPANION_URL;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_COMPANION_URL;
+    return raw.replace(/\/+$/, '');
+  } catch {
+    return DEFAULT_COMPANION_URL;
+  }
+}
+
 export function normalizeSettings(patch: Partial<Settings> | undefined | null): Settings {
   const saved = patch ?? {};
   return {
@@ -74,6 +93,9 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
     jumpAutoPlay: typeof saved.jumpAutoPlay === 'boolean' ? saved.jumpAutoPlay : DEFAULT_SETTINGS.jumpAutoPlay,
     // D4 新增：旧存档没有这个字段时按默认开启处理。
     frameEnabled: typeof saved.frameEnabled === 'boolean' ? saved.frameEnabled : DEFAULT_SETTINGS.frameEnabled,
+    // D6 新增：旧存档缺省指向本机默认端口，并默认开启同步。
+    companionUrl: normalizeCompanionUrl(saved.companionUrl),
+    syncEnabled: typeof saved.syncEnabled === 'boolean' ? saved.syncEnabled : DEFAULT_SETTINGS.syncEnabled,
   };
 }
 

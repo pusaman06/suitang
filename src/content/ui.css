@@ -282,6 +282,28 @@
   font-size: 11.5px;
 }
 
+.vt-sync {
+  display: block;
+  width: 100%;
+  margin: -2px 0 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #6f7890;
+  font: inherit;
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-sync:hover {
+  color: #9aa4bd;
+}
+
+.vt-sync-error {
+  color: #e08a8a;
+}
+
 .vt-answers {
   display: grid;
   gap: 10px;

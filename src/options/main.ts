@@ -9,6 +9,8 @@ const thinking = el<HTMLInputElement>('#thinking');
 const frameEnabled = el<HTMLInputElement>('#frame-enabled');
 const contextWindow = el<HTMLInputElement>('#context-window');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
+const companionUrl = el<HTMLInputElement>('#companion-url');
+const syncEnabled = el<HTMLInputElement>('#sync-enabled');
 const save = el<HTMLButtonElement>('#save');
 const status = el<HTMLParagraphElement>('#status');
 const diagPing = el<HTMLButtonElement>('#diag-ping');
@@ -30,6 +32,9 @@ async function init(): Promise<void> {
   frameEnabled.checked = settings.frameEnabled;
   contextWindow.value = String(settings.contextWindowSec);
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
+  companionUrl.value =
+    settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
+  syncEnabled.checked = settings.syncEnabled;
 }
 
 save.addEventListener('click', () => {
@@ -41,8 +46,12 @@ save.addEventListener('click', () => {
     frameEnabled: frameEnabled.checked,
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
     apiBaseUrl: apiBaseUrl.value.trim(),
+    companionUrl: companionUrl.value.trim(),
+    syncEnabled: syncEnabled.checked,
   }).then(next => {
     contextWindow.value = String(next.contextWindowSec);
+    companionUrl.value =
+      next.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : next.companionUrl;
     status.textContent = '已保存';
     window.setTimeout(() => {
       status.textContent = '';

@@ -19,6 +19,18 @@ import {
 } from '../shared/outline';
 import { extractCitationSeconds } from '../shared/citations';
 import {
+  buildCoursePayload,
+  buildPagePayload,
+  enqueueAndFlush,
+  flushQueue,
+  getSyncStatus,
+  readPageRecord,
+  writePageRecord,
+  SYNC_ALARM_NAME,
+  type CompanionQa,
+  type PagePayloadInput,
+} from '../shared/sync';
+import {
   QA_PORT_NAME,
   type QaAskPayload,
   type QaClientMessage,
@@ -364,6 +376,85 @@ async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue
   return readCache();
 }
 
+/* ------------------------- D6：本地落盘同步 ------------------------- */
+
+const syncedCourses = new Set<string>();
+
+async function cachedSubtitleLang(
+  bvid: string,
+  p: number,
+  cid: number | undefined,
+): Promise<string | undefined> {
+  if (!cid) return undefined;
+  const key = `sub:${bvid}:${p}:${cid}`;
+  const stored = await chrome.storage.local.get(key);
+  const cache = stored[key] as SubtitleCache | undefined;
+  const lan = cache?.track?.lan;
+  return typeof lan === 'string' && lan !== '' ? lan : undefined;
+}
+
+async function syncPageSnapshot(input: PagePayloadInput): Promise<void> {
+  const existing = await readPageRecord(input.bvid, input.p, input.cid);
+  const cid = input.cid ?? existing?.cid;
+  const owner = input.owner ?? existing?.owner ?? metaCache.get(input.bvid)?.owner;
+  const subtitleLang =
+    input.subtitleLang ??
+    (input.cues ? await cachedSubtitleLang(input.bvid, input.p, cid) : existing?.subtitle?.lang);
+  const page = buildPagePayload({
+    ...existing,
+    ...input,
+    cid,
+    owner,
+    subtitle: input.subtitle ?? existing?.subtitle,
+    subtitleLang,
+    cues: input.cues,
+    outline: input.outline ?? existing?.outline,
+    qa: input.qa ?? existing?.qa,
+    marks: input.marks ?? existing?.marks,
+  });
+  await writePageRecord(page);
+  await enqueueAndFlush({
+    kind: 'page',
+    bvid: page.bvid,
+    p: page.p,
+    payload: page,
+  });
+}
+
+async function syncQaPage(payload: QaAskPayload, cues: SubtitleCue[], answer: string): Promise<void> {
+  const existing = await readPageRecord(payload.bvid, payload.p, payload.cid);
+  const qaItem: CompanionQa = {
+    at: payload.at,
+    q: payload.question,
+    a: answer,
+    citations: extractCitationSeconds(answer, payload.duration),
+    createdAt: new Date().toISOString(),
+  };
+  const qa = [...(existing?.qa ?? []), qaItem].slice(-50);
+  await syncPageSnapshot({
+    bvid: payload.bvid,
+    p: payload.p,
+    cid: payload.cid,
+    aid: payload.aid,
+    title: payload.title,
+    partTitle: payload.partTitle,
+    pageCount: payload.pageCount,
+    duration: payload.duration,
+    cues,
+    qa,
+  });
+}
+
+function queueCourseOnce(meta: VideoMeta): void {
+  if (syncedCourses.has(meta.bvid)) return;
+  syncedCourses.add(meta.bvid);
+  void enqueueAndFlush({
+    kind: 'course',
+    bvid: meta.bvid,
+    payload: buildCoursePayload(meta),
+  }).catch(error => log('course sync enqueue failed', error));
+}
+
 /* ------------------------- D5：大纲 ------------------------- */
 
 interface OutlineRequest {
@@ -509,6 +600,16 @@ async function generateOutline(
       model: settings.textModel,
     };
     await chrome.storage.local.set({ [outlineStorageKey(request.bvid, request.p, request.cid)]: outline });
+    // D6：大纲成功即入队落盘；失败不影响大纲返回。
+    void syncPageSnapshot({
+      bvid: request.bvid,
+      p: request.p,
+      cid: request.cid,
+      title: request.title,
+      duration: request.duration,
+      cues,
+      outline: segments,
+    }).catch(error => log('outline sync failed', error));
     return { ok: true, outline };
   } catch (error) {
     return outlineError(error);
@@ -656,6 +757,9 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       // 切片 1 不落库；等 qaStore 落地后这里换成记录 id。
       recordId: '',
     });
+
+    // D6：问答完成即入队，失败只写 lastError，不影响回答。
+    void syncQaPage(payload, cues, text).catch(error => log('qa sync failed', error));
   } catch (error) {
     if (error instanceof QaAbortError) {
       postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
@@ -748,6 +852,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'video-meta' && typeof message.bvid === 'string') {
     const cached = metaCache.get(message.bvid);
     if (cached) {
+      queueCourseOnce(cached);
       sendResponse(cached);
       return false;
     }
@@ -758,7 +863,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(null);
       return false;
     }
-    void readVideoMeta(tabId).then(meta => sendResponse(meta));
+    void readVideoMeta(tabId).then(meta => {
+      if (meta) queueCourseOnce(meta);
+      sendResponse(meta);
+    });
     return true;
   }
 
@@ -876,8 +984,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'sync:status') {
+    void getSyncStatus()
+      .then(status => sendResponse(status))
+      .catch(error =>
+        sendResponse({
+          enabled: false,
+          url: '',
+          pending: 0,
+          failed: 0,
+          lastError: error instanceof Error ? error.message : '读取同步状态失败',
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'sync:flush') {
+    void flushQueue()
+      .then(status => sendResponse({ ok: true, status }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '同步失败',
+        }),
+      );
+    return true;
+  }
+
   return false;
 });
+
+chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== SYNC_ALARM_NAME) return;
+  void flushQueue().catch(error => log('sync alarm flush failed', error));
+});
+chrome.runtime.onStartup.addListener(() => {
+  void flushQueue().catch(error => log('sync startup flush failed', error));
+});
+// service worker 每次唤醒也补一次；失败只记录，不打扰页面。
+void flushQueue().catch(error => log('sync initial flush failed', error));
 
 function sendToTab(tabId: number, message: unknown): void {
   chrome.tabs.sendMessage(tabId, message, () => void chrome.runtime.lastError);

@@ -166,6 +166,19 @@
           API 地址（留空用 https://api.deepseek.com）
           <input id="api-base-url" type="text" placeholder="https://api.deepseek.com" autocomplete="off" />
         </label>
+        <label>
+          本地 companion 地址
+          <input
+            id="companion-url"
+            type="text"
+            placeholder="http://127.0.0.1:8787"
+            autocomplete="off"
+          />
+        </label>
+        <label class="check">
+          <input id="sync-enabled" type="checkbox" />
+          开启本地落盘同步（companion 没开不影响问答）
+        </label>
       </details>
 
       <button id="save">保存</button>
