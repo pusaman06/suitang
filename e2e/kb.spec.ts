@@ -146,6 +146,30 @@ test.describe('companion 知识库路由', () => {
     expect(readFileSync(join(kbDir, '20-知识笔记', fileName), 'utf8')).toBe('# 第二版\n');
   });
 
+  test('带中文标点的标题也能落盘：问号、冒号、书名号都放行', async () => {
+    const fileName = '2026-11-06-DeepSeek 新出的 Super Agent 是什么？真有用么？（BV1kr4h6fExw）.md';
+    const response = await fetch(`${base}/api/kb/note`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName, markdown: '# 中文标点\n' }),
+    });
+    const data = (await response.json()) as { ok?: boolean; relative?: string };
+    expect(data.ok).toBe(true);
+    expect(data.relative).toBe(`20-知识笔记/${fileName}`);
+    expect(readFileSync(join(kbDir, '20-知识笔记', fileName), 'utf8')).toBe('# 中文标点\n');
+  });
+
+  test('Windows 真正非法的字符仍被拒', async () => {
+    for (const fileName of ['a:b.md', 'a|b.md', 'a*/b.md', 'a?.md', 'a<b.md', '..md']) {
+      const response = await fetch(`${base}/api/kb/note`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName, markdown: 'x' }),
+      });
+      expect(response.ok, fileName).toBe(false);
+    }
+  });
+
   test('非法文件名被拒', async () => {
     const response = await fetch(`${base}/api/kb/note`, {
       method: 'POST',

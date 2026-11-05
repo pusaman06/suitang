@@ -20,7 +20,14 @@ const DEFAULT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const DEFAULT_KB_DIR = path.resolve('D:/knowledge-base');
 const KB_NOTE_SUBDIR = '20-知识笔记';
 /** 文件名白名单：中文、字母数字、空格和几个常见标点，杜绝路径穿越。 */
-const KB_FILE_RE = /^[\p{Script=Han}A-Za-z0-9 _\-（）()〔〕【】\[\]·、，,.]+\.md$/u;
+/** 文件名规则：只排除 Windows 真正不允许的字符，中文标点（问号、冒号、书名号）都放行。 */
+function isValidKbFileName(name) {
+  if (!name.endsWith('.md') || name.length > 160) return false;
+  const stem = name.slice(0, -3);
+  if (stem === '' || stem.includes('..')) return false;
+  if (/^[. ]|[. ]$/.test(stem)) return false;
+  return !/[<>:"/\\|?*\u0000-\u001F\u007F]/.test(stem);
+}
 const BVID_RE = /^BV[0-9A-Za-z]{10}$/;
 const startedAt = Date.now();
 
@@ -385,7 +392,7 @@ async function handle(req, res, videosRoot, kbDir, origin) {
     const body = await readJsonBody(req);
     const fileName = typeof body?.fileName === 'string' ? body.fileName.trim() : '';
     const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
-    if (fileName === '' || !KB_FILE_RE.test(fileName) || fileName.includes('..')) {
+    if (fileName === '' || !isValidKbFileName(fileName)) {
       sendError(res, 400, 'bad-request', 'fileName 不合法（只接受纯文件名）', origin);
       return;
     }
