@@ -103,6 +103,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
   const send = must<HTMLButtonElement>(shadow, '.vt-send');
+  const head = must<HTMLElement>(shadow, '.vt-head');
 
   let currentInfo = info;
   let settings: Settings | null = null;
@@ -817,6 +818,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       const requestId = `q${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
       activeRequestId = requestId;
       streamTurn = addTurn(trimmed);
+      input.value = '';
       setBusy(true);
       status.textContent = settings.apiKey ? '连接中…' : '未配置 API Key';
       ensurePort().postMessage({ v: 1, type: 'qa:ask', requestId, payload });
@@ -862,6 +864,78 @@ export function mountUi(info: VideoInfo): UiHandle {
   };
   document.addEventListener('keydown', onKeyDown);
 
+  /* -------- 面板拖动：拖动标题栏，位置记在本地 -------- */
+
+  const PANEL_POS_KEY = 'panel:pos';
+
+  const placePanel = (x: number, y: number) => {
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const maxX = Math.max(8, window.innerWidth - width - 8);
+    const maxY = Math.max(8, window.innerHeight - height - 8);
+    panel.style.left = `${Math.min(Math.max(8, x), maxX)}px`;
+    panel.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+  };
+
+  const savePanelPos = () => {
+    const rect = panel.getBoundingClientRect();
+    void chrome.storage.local.set({
+      [PANEL_POS_KEY]: { x: Math.round(rect.left), y: Math.round(rect.top) },
+    });
+  };
+
+  void chrome.storage.local.get(PANEL_POS_KEY).then(saved => {
+    const pos = (saved as Record<string, unknown> | undefined)?.[PANEL_POS_KEY];
+    if (!pos || typeof pos !== 'object') return;
+    const { x, y } = pos as { x?: unknown; y?: unknown };
+    if (typeof x === 'number' && typeof y === 'number') placePanel(x, y);
+  });
+
+  let dragging: { dx: number; dy: number } | null = null;
+
+  head.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest('button')) return;
+    const rect = panel.getBoundingClientRect();
+    dragging = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+    head.setPointerCapture(event.pointerId);
+    panel.classList.add('vt-dragging');
+    event.preventDefault();
+  });
+
+  head.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    placePanel(event.clientX - dragging.dx, event.clientY - dragging.dy);
+  });
+
+  const endDrag = (event: PointerEvent) => {
+    if (!dragging) return;
+    dragging = null;
+    if (head.hasPointerCapture(event.pointerId)) head.releasePointerCapture(event.pointerId);
+    panel.classList.remove('vt-dragging');
+    savePanelPos();
+  };
+  head.addEventListener('pointerup', endDrag);
+  head.addEventListener('pointercancel', endDrag);
+
+  const onResize = () => {
+    if (panel.hidden) return;
+    const rect = panel.getBoundingClientRect();
+    placePanel(rect.left, rect.top);
+  };
+  window.addEventListener('resize', onResize);
+
+  /* -------- 键盘隔离：面板里的按键不喂给 B 站播放器 -------- */
+
+  const keepKeysInside = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') return;
+    event.stopPropagation();
+  };
+  panel.addEventListener('keydown', keepKeysInside);
+  panel.addEventListener('keyup', keepKeysInside);
+
   document.body.appendChild(host);
 
   return {
@@ -869,6 +943,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     update: render,
     destroy() {
       document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onResize);
       document.removeEventListener('play', onPlayPause, true);
       document.removeEventListener('pause', onPlayPause, true);
       document.removeEventListener('timeupdate', onOutlineTimeupdate, true);

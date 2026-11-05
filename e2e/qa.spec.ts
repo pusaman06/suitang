@@ -272,3 +272,55 @@ test('全局问题：给全片抽稀字幕，而不是附近窗口', async () =>
   expect(user?.content).not.toContain('附近字幕（');
   expect(user?.content).toContain('整节课一共讲了哪几个主题？');
 });
+
+test('面板可拖动、发送后清空输入框、键盘不穿透到页面', async () => {
+  await clearStorage(context, extensionId);
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-test',
+    apiBaseUrl: baseUrl,
+    frameEnabled: false,
+  });
+  await openPanel(page, VIDEO_URL);
+
+  // 1. 拖动标题栏，面板位置要真的变。
+  const panel = page.locator('.vt-panel');
+  const before = await panel.boundingBox();
+  const head = await page.locator('.vt-head').boundingBox();
+  expect(before && head).toBeTruthy();
+  await page.mouse.move(head!.x + 40, head!.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(head!.x + 40 - 120, head!.y + 10 - 70, { steps: 6 });
+  await page.mouse.up();
+  const after = await panel.boundingBox();
+  expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(50);
+  expect(before!.y - after!.y).toBeGreaterThan(30);
+  await page.screenshot({ path: join(SHOT_DIR, 'd3-panel-dragged.png') });
+
+  // 2. 面板里的按键不应该冒泡到 document（B 站快捷键就在 document 上）。
+  await page.evaluate(() => {
+    const scope = window as unknown as { __pageKeys?: number };
+    scope.__pageKeys = 0;
+    document.addEventListener('keydown', () => {
+      scope.__pageKeys = (scope.__pageKeys ?? 0) + 1;
+    });
+  });
+  await page.mouse.click(400, 300);
+  await page.keyboard.press('ArrowRight');
+  const outside = await page.evaluate(
+    () => (window as unknown as { __pageKeys?: number }).__pageKeys ?? 0,
+  );
+  expect(outside).toBeGreaterThan(0);
+
+  const input = page.locator('.vt-input');
+  await input.click();
+  await input.press('ArrowRight');
+  const inside = await page.evaluate(
+    () => (window as unknown as { __pageKeys?: number }).__pageKeys ?? 0,
+  );
+  expect(inside).toBe(outside);
+
+  // 3. 发送后输入框清空。
+  await input.fill('清空测试');
+  await page.locator('.vt-send').click();
+  await expect(input).toHaveValue('');
+});
