@@ -37,6 +37,7 @@ import {
   flushQueue,
   getSyncStatus,
   readPageRecord,
+  retryFailed,
   writePageRecord,
   SYNC_ALARM_NAME,
   type CompanionQa,
@@ -1803,7 +1804,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'sync:flush') {
-    void flushQueue()
+    // 用户手动点「同步失败 N 条」：先把它放回队列，再走正常 flush。
+    void retryFailed()
+      .catch(() => 0)
+      .then(() => flushQueue())
       .then(status => sendResponse({ ok: true, status }))
       .catch(error =>
         sendResponse({

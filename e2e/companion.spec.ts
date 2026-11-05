@@ -377,3 +377,45 @@ test('重启 companion 后手动 flush，文件更新且 pending 归零', async 
   await expect(page.locator('.vt-sync')).toContainText('已同步', { timeout: 10_000 });
   await page.screenshot({ path: resolve(SHOT_DIR, 'd6-sync.png'), fullPage: false });
 });
+
+test('失败队列里的条目，点一下「同步失败 N 条」就放回队列重试', async () => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/src/options/index.html`);
+  try {
+    // 造一条已判死刑的条目：相当于 companion 长时间没开、重试 3 次后被移进失败队列。
+    await options.evaluate(async () => {
+      await chrome.storage.local.set({
+        'sync:failed': [
+          {
+            id: 's-retry-1',
+            kind: 'page',
+            bvid: 'BV1sHU9BmEne',
+            p: 1,
+            payload: { bvid: 'BV1sHU9BmEne', p: 1 },
+            attempts: 3,
+            queuedAt: Date.now(),
+            failedAt: Date.now(),
+            lastError: 'Failed to fetch',
+          },
+        ],
+        'sync:queue': [],
+      });
+    });
+
+    const before = await sendRuntime<{ pending: number; failed: number }>(options, {
+      type: 'sync:status',
+    });
+    expect(before.failed).toBe(1);
+    expect(before.pending).toBe(0);
+
+    const flushed = await sendRuntime<{ ok: boolean }>(options, { type: 'sync:flush' });
+    expect(flushed.ok).toBe(true);
+
+    const after = await sendRuntime<{ pending: number; failed: number }>(options, {
+      type: 'sync:status',
+    });
+    expect(after.failed).toBe(0);
+  } finally {
+    await options.close();
+  }
+});

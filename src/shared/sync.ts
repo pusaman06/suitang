@@ -411,6 +411,34 @@ export async function getSyncStatus(): Promise<SyncStatus> {
 
 let flushPromise: Promise<SyncStatus> | null = null;
 
+/**
+ * 把失败队列整体放回待同步队列，重试次数归零。
+ * 只有用户手动点「同步失败 N 条」时才调，定时重试不碰它，避免失败条目无限重投。
+ */
+export function retryFailed(): Promise<number> {
+  return withQueueLock(async () => {
+    const failed = await readFailed();
+    if (failed.length === 0) return 0;
+    const queue = await readQueue();
+    const queuedIds = new Set(queue.map(item => item.id));
+    const restored: SyncQueueItem[] = failed
+      .filter(item => !queuedIds.has(item.id))
+      .map(item => ({
+        id: item.id,
+        kind: item.kind,
+        bvid: item.bvid,
+        ...(item.p === undefined ? {} : { p: item.p }),
+        payload: item.payload,
+        attempts: 0,
+        queuedAt: item.queuedAt,
+      }));
+    await writeQueue([...restored, ...queue]);
+    await writeFailed([]);
+    await clearLastError();
+    return restored.length;
+  });
+}
+
 /** 每次最多 20 条，逐条 PUT；失败累计 3 次移入 sync:failed。 */
 export function flushQueue(): Promise<SyncStatus> {
   if (flushPromise) return flushPromise;
