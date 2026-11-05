@@ -25,3 +25,35 @@ export interface VideoInfo {
   duration?: number;
   pageCount?: number;
 }
+
+export interface SubtitleTrack {
+  lan: string;
+  lan_doc: string;
+  subtitle_url: string;
+}
+
+export interface SubtitleCue {
+  from: number;
+  to: number;
+  content: string;
+}
+
+export interface SubtitleCache {
+  bvid: string;
+  p: number;
+  cid: number;
+  fetchedAt: number;
+  track: SubtitleTrack;
+  total: number;
+  cues: SubtitleCue[];
+}
+
+export interface SubtitleResult {
+  ok: boolean;
+  cached?: boolean;
+  track?: SubtitleTrack;
+  total?: number;
+  cues?: SubtitleCue[];
+  needLogin?: boolean;
+  error?: string;
+}

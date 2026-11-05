@@ -101,7 +101,8 @@
   font-size: 12px;
 }
 
-.vt-ping {
+.vt-ping,
+.vt-sub {
   width: 100%;
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -112,8 +113,18 @@
   cursor: pointer;
 }
 
-.vt-ping:hover {
+.vt-ping:hover,
+.vt-sub:hover {
   background: #2a3044;
+}
+
+.vt-sub {
+  margin-top: 8px;
+}
+
+.vt-sub:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .vt-log {

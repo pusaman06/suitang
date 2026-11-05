@@ -13,17 +13,15 @@ async function boot(): Promise<void> {
   try {
     const info = await waitForVideoInfo();
     if (!info) return;
-    if (document.getElementById(HOST_ID)) return;
+    // SPA 只改 URL（q、p、vd_source）时保留面板；否则点击/滚动状态会被清掉。
+    if (handle && document.getElementById(HOST_ID)) {
+      handle.update(info);
+      return;
+    }
     handle = mountUi(info);
   } finally {
     booting = false;
   }
-}
-
-function reset(): void {
-  handle?.destroy();
-  handle = null;
-  document.getElementById(HOST_ID)?.remove();
 }
 
 chrome.runtime.onMessage.addListener(message => {
@@ -33,8 +31,7 @@ chrome.runtime.onMessage.addListener(message => {
 window.setInterval(() => {
   if (location.href === lastHref) return;
   lastHref = location.href;
-  reset();
-  window.setTimeout(() => void boot(), 500);
-}, 800);
+  window.setTimeout(() => void boot(), 300);
+}, 500);
 
 void boot();
