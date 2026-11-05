@@ -259,6 +259,31 @@ test('点生成后出现分段，点第 2 段跳到该段起点；再次打开�
   expect(mock.requests.length).toBe(cachedBefore);
 });
 
+test('点重新生成会再请求一次，并用新结果替换旧大纲', async () => {
+  await clearOutlineCache();
+  await outlineSettings();
+  await openPanel(page);
+  await seedOutlineCues();
+  mock.state.delayMs = 10;
+  await page.locator('.vt-outline-generate').click();
+  await expect(page.locator('.vt-outline-state')).toHaveText('9 段', { timeout: 30_000 });
+  await expect(page.locator('.vt-outline-refresh')).toBeVisible();
+
+  const before = mock.requests.length;
+  mock.state.outlineAnswer = JSON.stringify(
+    Array.from({ length: 9 }, (_, i) => ({
+      start: i * 100,
+      end: (i + 1) * 100,
+      title: `新分段 ${i + 1}`,
+    })),
+  );
+  await page.locator('.vt-outline-refresh').click();
+  await expect(page.locator('.vt-outline-item').first()).toContainText('新分段 1', {
+    timeout: 30_000,
+  });
+  expect(mock.requests.length).toBe(before + 1);
+});
+
 test('围栏 + 乱序 + 重叠的坏格式仍渲染成有序不重叠的分段', async () => {
   await clearOutlineCache();
   mock.state.outlineAnswer = `\`\`\`json

@@ -70,6 +70,11 @@ export function mountUi(info: VideoInfo): UiHandle {
             </div>
           </div>
           <ol class="vt-outline-list" hidden></ol>
+          <div class="vt-outline-foot" hidden>
+            <button class="vt-outline-refresh" type="button" title="清掉当前大纲，重新生成一份">
+              重新生成
+            </button>
+          </div>
           <div class="vt-outline-error" hidden>
             <span class="vt-outline-error-text"></span>
             <button class="vt-retry vt-outline-retry" type="button">重试</button>
@@ -107,6 +112,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineAsr = must<HTMLButtonElement>(shadow, '.vt-outline-asr');
   const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
+  const outlineFoot = must<HTMLElement>(shadow, '.vt-outline-foot');
+  const outlineRefresh = must<HTMLButtonElement>(shadow, '.vt-outline-refresh');
   const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
@@ -496,12 +503,14 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineActiveIndex = -1;
       outlineEmpty.hidden = !outlineError.hidden;
     }
+    outlineFoot.hidden = !outline || outline.segments.length === 0;
     renderOutlineState();
   }
 
   function setOutlineError(message: string, retry: () => void): void {
     outlineEmpty.hidden = true;
     outlineList.hidden = true;
+    outlineFoot.hidden = true;
     outlineError.hidden = false;
     outlineErrorText.textContent = message;
     outlineRetryAction = retry;
@@ -574,6 +583,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineCaptureTotal = total;
     outlineEmpty.hidden = false;
     outlineList.hidden = true;
+    outlineFoot.hidden = true;
     outlineError.hidden = true;
     outlineEmptyText.textContent = `正在抓画面 ${done}/${total}…`;
     renderOutlineState();
@@ -938,6 +948,12 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   outlineHead.addEventListener('click', () => setOutlineExpanded(!outlineExpanded));
   outlineGenerate.addEventListener('click', () => void generateOutline());
+  outlineRefresh.addEventListener('click', () => {
+    if (outlineGenerating) return;
+    outline = null;
+    renderOutline();
+    void generateOutline();
+  });
   outlineRetry.addEventListener('click', () => {
     const retry = outlineRetryAction;
     outlineRetryAction = null;

@@ -205,6 +205,26 @@
   gap: 8px;
 }
 
+.vt-outline-foot {
+  padding-top: 6px;
+  text-align: right;
+}
+
+.vt-outline-refresh {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.52);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vt-outline-refresh:hover {
+  color: rgba(255, 255, 255, 0.88);
+  text-decoration: underline;
+}
+
 .vt-outline-generate {
   padding: 4px 12px;
   border: 1px solid rgba(126, 162, 255, 0.35);
