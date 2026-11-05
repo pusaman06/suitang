@@ -177,6 +177,23 @@ test('parseOutline 段数不足或 JSON 坏掉时返回 null', () => {
   ).toBeNull();
 });
 
+test('parseOutline 段数过多时合并到上限，而不是整份丢掉', () => {
+  // 真实案例：42 分钟的视频被模型按字幕粒度切成 27 段 → 旧逻辑直接判坏格式。
+  const many = Array.from({ length: 27 }, (_, index) => ({
+    start: index * 90,
+    end: index * 90 + 91,
+    title: `第${index + 1}段`,
+  }));
+  const merged = parseOutline(JSON.stringify(many), 2431, { min: 8, max: 15 });
+  expect(merged).not.toBeNull();
+  expect(merged!.length).toBe(15);
+  expect(merged![0].start).toBe(0);
+  expect(merged![merged!.length - 1].end).toBe(2431);
+  for (let index = 1; index < merged!.length; index += 1) {
+    expect(merged![index].start).toBeGreaterThanOrEqual(merged![index - 1].end - 0.001);
+  }
+});
+
 test('toSeconds 认整数秒，也认模型常写的 mm:ss 和 h:mm:ss', () => {
   expect(toSeconds(125)).toBe(125);
   expect(toSeconds('125')).toBe(125);

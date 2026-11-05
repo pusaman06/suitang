@@ -184,7 +184,26 @@ export function parseOutline(
   const lastSegment = segments[segments.length - 1];
   if (limit - lastSegment.end < 30) lastSegment.end = limit;
 
-  if (segments.length < range.min || segments.length > range.max) return null;
+  if (segments.length < range.min) return null;
+  // 模型经常按字幕粒度切得太碎（比如 42 分钟切 27 段）。硬拒不如合并：
+  // 均匀分组，组内首尾相接，标题取组里第一段的。
+  return coalesceSegments(segments, range.max);
+}
 
-  return segments;
+/** 把过多的小段均匀合并到 max 段以内；不改变覆盖范围。 */
+export function coalesceSegments(segments: OutlineSegment[], max: number): OutlineSegment[] {
+  if (segments.length <= max) return segments;
+  const merged: OutlineSegment[] = [];
+  for (let index = 0; index < max; index += 1) {
+    const from = Math.floor((index * segments.length) / max);
+    const to = Math.floor(((index + 1) * segments.length) / max);
+    const chunk = segments.slice(from, to);
+    if (chunk.length === 0) continue;
+    merged.push({
+      start: chunk[0].start,
+      end: chunk[chunk.length - 1].end,
+      title: chunk[0].title,
+    });
+  }
+  return merged;
 }
