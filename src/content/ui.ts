@@ -103,7 +103,7 @@ export function mountUi(info: VideoInfo): UiHandle {
           <span class="vt-kb-title">存到知识库</span>
           <span class="vt-kb-hint"></span>
         </div>
-        <textarea class="vt-kb-preview" rows="12" spellcheck="false"></textarea>
+        <textarea class="vt-kb-preview" rows="8" spellcheck="false"></textarea>
         <div class="vt-kb-foot">
           <button class="vt-kb-confirm" type="button">写入知识库</button>
           <button class="vt-kb-cancel" type="button">取消</button>
@@ -296,8 +296,11 @@ export function mountUi(info: VideoInfo): UiHandle {
         ? `${kbFileName} · 摘要由模型生成，可直接改`
         : `${kbFileName} · 没配 API Key，只有资料没有摘要`;
       kbBox.hidden = false;
-      kbBox.scrollIntoView({ block: 'nearest' });
+      kbBox.scrollIntoView({ block: 'start' });
       kbPreview.focus();
+      // focus() 会把光标带到末尾并滚动，这里强制回到开头。
+      kbPreview.setSelectionRange(0, 0);
+      kbPreview.scrollTop = 0;
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : '生成笔记草稿失败';
     } finally {
