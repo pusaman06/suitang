@@ -88,6 +88,41 @@
         color: #7dd3a0;
         font-size: 13px;
       }
+      .diag {
+        margin-top: 26px;
+        padding-top: 18px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .diag h2 {
+        margin: 0 0 4px;
+        font-size: 15px;
+      }
+      .diag .hint {
+        margin: 0 0 12px;
+        color: #8b93a8;
+        font-size: 12px;
+      }
+      .diag-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button.ghost {
+        background: #232838;
+        color: #c7cee0;
+        font-weight: 500;
+      }
+      #diag-log {
+        max-height: 220px;
+        margin: 12px 0 0;
+        overflow: auto;
+        padding: 10px 12px;
+        border-radius: 9px;
+        background: #0e1119;
+        color: #9aa4bd;
+        font: 12px/1.5 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+      }
     </style>
   </head>
   <body>
@@ -130,6 +165,16 @@
 
       <button id="save">保存</button>
       <p id="status" role="status"></p>
+
+      <section class="diag">
+        <h2>诊断</h2>
+        <p class="hint">这两个按钮用来验证扩展与 B 站链路；先打开一个视频页。</p>
+        <div class="diag-actions">
+          <button id="diag-ping" class="ghost">测试后台连接</button>
+          <button id="diag-sub" class="ghost">测试字幕（前 10 条）</button>
+        </div>
+        <pre id="diag-log"></pre>
+      </section>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>

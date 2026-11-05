@@ -5,6 +5,7 @@ import {
   SHOT_DIR,
   VIDEO_URL,
   clearStorage,
+  fetchSubtitlesFromOptions,
   getExtensionId,
   hasLoginCookie,
   isOursError,
@@ -70,9 +71,9 @@ test('请求体符合协议，回答含可点击 [mm:ss] 且能跳转', async ()
   });
 
   await openPanel(page, VIDEO_URL);
-  // 先走 D2 的路径把字幕灌进缓存，问答才有「附近字幕」可发。
-  await page.locator('.vt-sub').click();
-  await expect(page.locator('.vt-log')).toContainText(/共 \d+ 条/, { timeout: 60_000 });
+  // 先走设置页诊断同一条链路把字幕灌进缓存，问答才有「附近字幕」可发。
+  const subtitles = await fetchSubtitlesFromOptions(context, extensionId);
+  expect(subtitles.ok, subtitles.error).toBe(true);
 
   const before = mock.requests.length;
   await page.locator('.vt-input').fill('这段在讲什么？');

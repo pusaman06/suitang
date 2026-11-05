@@ -3,6 +3,7 @@ import type { BrowserContext, Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import {
   VIDEO_URL,
+  fetchSubtitlesFromOptions,
   getExtensionId,
   hasLoginCookie,
   isOursError,
@@ -10,8 +11,8 @@ import {
 } from './helpers';
 
 /**
- * D2 验收：真浏览器里点「测试字幕（前 10 条）」，字幕列表 → 字幕文件 → 缓存
- * 整条链路跑通。失败时截图留在 e2e/screenshots。
+ * D2 验收：字幕列表 → 字幕文件 → 缓存整条链路跑通。
+ * 调试按钮已移到设置页，这里直接给 background 发 video-meta / subtitle:list。
  */
 test.describe('D2 字幕抓取', () => {
   let context: BrowserContext;
@@ -51,24 +52,21 @@ test.describe('D2 字幕抓取', () => {
     await context?.close();
   });
 
-  test('点「测试字幕」能拉到字幕并写进 chrome.storage.local', async () => {
+  test('设置页诊断能拉到字幕并写进 chrome.storage.local', async () => {
     const host = page.locator('#video-tutor-host');
     await expect(host, '悬浮球没注入，检查 content script 是否加载').toBeAttached({ timeout: 60_000 });
 
     await host.locator('.vt-ball').click();
     await expect(host.locator('.vt-panel')).toBeVisible();
-
-    const log = host.locator('.vt-log');
-    await host.locator('.vt-sub').click();
-
-    // 字幕文件要下载、解析，给足时间；失败文案也会落在这里。
-    await expect(log).toContainText(/共 \d+ 条/, { timeout: 90_000 });
-    await expect(log, `面板报错：${await log.textContent()}`).not.toContainText('字幕失败');
-    await expect(log).toContainText(/新拉取/);
-    // 只校条数不够：B 站接口会偶发返回别的视频的地址，正文必须对得上。
-    await expect(log).toContainText('零基础学AI');
-
     await page.screenshot({ path: resolve('e2e', 'screenshots', 'd2-panel.png') });
+
+    // 字幕文件要下载、解析，给足时间；失败原因落在返回值里。
+    const result = await fetchSubtitlesFromOptions(context, extensionId);
+    expect(result.ok, `字幕失败：${result.error ?? '未知错误'}`).toBe(true);
+    expect(result.total ?? 0).toBeGreaterThan(0);
+    expect(result.cached).toBe(false);
+    // 只校条数不够：B 站接口会偶发返回别的视频的地址，正文必须对得上。
+    expect((result.cues ?? []).map(cue => cue.content).join('')).toContain('零基础学AI');
 
     // 缓存真的落盘了：从扩展自己的页面读 storage。
     const options = await context.newPage();

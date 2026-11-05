@@ -560,7 +560,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(cached);
       return false;
     }
-    const tabId = sender.tab?.id;
+    // 设置页本身也是一个标签页，sender.tab 会指向设置页；显式 tabId 优先。
+    const tabId =
+      typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
     if (tabId === undefined) {
       sendResponse(null);
       return false;
@@ -570,7 +572,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'subtitle:list') {
-    const tabId = sender.tab?.id;
+    // 设置页的诊断按钮没有视频页上下文，消息里显式带 tabId；它优先于 sender.tab
+    // （否则会指向设置页自己，executeScript 会因扩展页不可注入而失败）。
+    const tabId =
+      typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
     if (tabId === undefined) {
       sendResponse({ ok: false, error: '找不到当前标签页' } satisfies SubtitleResult);
       return false;

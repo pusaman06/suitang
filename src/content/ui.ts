@@ -1,9 +1,8 @@
 import styleText from './ui.css?inline';
-import { formatCueTime } from '../shared/subtitles';
 import { renderAnswerHtml } from '../shared/citations';
 import { QA_PORT_NAME, type QaAskPayload, type QaServerMessage, type QaWindowInfo } from '../shared/qa';
 import { loadSettings, type Settings } from '../shared/settings';
-import type { SubtitleResult, VideoInfo } from '../shared/types';
+import type { VideoInfo } from '../shared/types';
 import { getPlaybackTime, getVideoElement, seekVideo } from './page';
 
 const HOST_ID = 'video-tutor-host';
@@ -41,19 +40,11 @@ export function mountUi(info: VideoInfo): UiHandle {
           <button class="vt-send">发送</button>
         </div>
       </div>
-      <div class="vt-tools">
-        <button class="vt-ping">测试后台连接</button>
-        <button class="vt-sub">测试字幕（前 10 条）</button>
-      </div>
-      <pre class="vt-log"></pre>
     </section>`;
 
   const ball = must<HTMLButtonElement>(shadow, '.vt-ball');
   const panel = must<HTMLElement>(shadow, '.vt-panel');
   const close = must<HTMLButtonElement>(shadow, '.vt-close');
-  const ping = must<HTMLButtonElement>(shadow, '.vt-ping');
-  const sub = must<HTMLButtonElement>(shadow, '.vt-sub');
-  const log = must<HTMLPreElement>(shadow, '.vt-log');
   const course = must<HTMLElement>(shadow, '.vt-course');
   const part = must<HTMLElement>(shadow, '.vt-part');
   const ids = must<HTMLElement>(shadow, '.vt-ids');
@@ -308,53 +299,6 @@ export function mountUi(info: VideoInfo): UiHandle {
     const raw = target.dataset.t;
     if (!raw) return;
     seekVideo(Number(raw), { autoPlay: settings?.jumpAutoPlay === true });
-  });
-
-  ping.addEventListener('click', () => {
-    log.textContent = '连接中…';
-    chrome.runtime.sendMessage({ type: 'ping' }, reply => {
-      const error = chrome.runtime.lastError;
-      log.textContent = error ? `后台未响应：${error.message}` : JSON.stringify(reply, null, 2);
-    });
-  });
-
-  sub.addEventListener('click', () => {
-    if (!currentInfo.aid || !currentInfo.cid) {
-      log.textContent = '缺少 aid/cid，请等页面元数据加载完再试。';
-      return;
-    }
-    sub.disabled = true;
-    log.textContent = '拉取字幕…';
-    chrome.runtime.sendMessage(
-      {
-        type: 'subtitle:list',
-        bvid: currentInfo.bvid,
-        aid: currentInfo.aid,
-        cid: currentInfo.cid,
-        p: currentInfo.p,
-        duration: currentInfo.duration,
-      },
-      (reply: SubtitleResult | undefined) => {
-        sub.disabled = false;
-        const error = chrome.runtime.lastError;
-        if (error) {
-          log.textContent = `后台未响应：${error.message}`;
-          return;
-        }
-        if (!reply?.ok) {
-          const loginHint = reply?.needLogin ? '\n请确认 Edge 已登录 B 站，然后重试。' : '';
-          log.textContent = `字幕失败：${reply?.error ?? '未知错误'}${loginHint}`;
-          return;
-        }
-        const lines = (reply.cues ?? []).map(
-          cue => `[${formatCueTime(cue.from)} → ${formatCueTime(cue.to)}] ${cue.content}`,
-        );
-        const head = `${reply.track?.lan_doc || reply.track?.lan || '字幕'} · 共 ${
-          reply.total ?? 0
-        } 条 · ${reply.cached ? '缓存' : '新拉取'}`;
-        log.textContent = `${head}\n${lines.join('\n')}`;
-      },
-    );
   });
 
   const onKeyDown = (event: KeyboardEvent) => {

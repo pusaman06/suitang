@@ -76,3 +76,52 @@ export async function writeSettings(
   }, patch);
   await page.close();
 }
+
+export interface SubtitleDiagnosticsResult {
+  ok: boolean;
+  total?: number;
+  cached?: boolean;
+  error?: string;
+  needLogin?: boolean;
+  track?: { lan?: string; lan_doc?: string };
+  cues?: Array<{ from: number; to: number; content: string }>;
+}
+
+/**
+ * 走设置页诊断同一条链路：video-meta → subtitle:list（显式 tabId）。
+ * D2 面板里的调试按钮已经移到设置页，用例不再依赖内容面板 UI。
+ */
+export async function fetchSubtitlesFromOptions(
+  context: BrowserContext,
+  extensionId: string,
+): Promise<SubtitleDiagnosticsResult> {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/src/options/index.html`);
+  try {
+    return (await page.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: 'https://www.bilibili.com/video/*' });
+      const tab = tabs[tabs.length - 1];
+      if (!tab?.id || !tab.url) return { ok: false, error: '没有打开的视频页' };
+      const bvid = /\/video\/(BV[0-9A-Za-z]+)/.exec(tab.url)?.[1] ?? '';
+      const p = Number(new URL(tab.url).searchParams.get('p') ?? '1') || 1;
+      const meta = (await chrome.runtime.sendMessage({
+        type: 'video-meta',
+        bvid,
+        tabId: tab.id,
+      })) as { aid?: number; pages?: Array<{ page: number; cid: number; duration: number }> } | null;
+      const part = meta?.pages?.find(item => item.page === p) ?? meta?.pages?.[0];
+      if (!meta?.aid || !part) return { ok: false, error: '缺少 aid/cid' };
+      return (await chrome.runtime.sendMessage({
+        type: 'subtitle:list',
+        bvid,
+        aid: meta.aid,
+        cid: part.cid,
+        p: part.page,
+        duration: part.duration,
+        tabId: tab.id,
+      })) as SubtitleDiagnosticsResult;
+    })) as SubtitleDiagnosticsResult;
+  } finally {
+    await page.close();
+  }
+}
