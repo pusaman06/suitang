@@ -118,6 +118,7 @@ async function outlineSettings(): Promise<void> {
     apiKey: 'sk-e2e-outline',
     apiBaseUrl: baseUrl,
     textModel: 'deepseek-flash',
+    visionModel: 'deepseek-vision-e2e',
     maxTokens: 2048,
     thinking: false,
     contextWindowSec: 90,
@@ -314,6 +315,101 @@ test('mock 500 显示错误和重试，重试成功后问答仍可用', async ()
   await page.locator('.vt-input').fill('这段在讲什么？');
   await page.locator('.vt-send').click();
   await expect(page.locator('.vt-a').last()).toContainText('测试全文结束', { timeout: 20_000 });
+});
+
+test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复播放位置', async () => {
+  await clearStorage(context, extensionId);
+  await outlineSettings();
+  await clearOutlineCache();
+  mock.state.outlineAnswer = DEFAULT_OUTLINE_ANSWER;
+  mock.state.delayMs = 10;
+  mock.state.status = 200;
+
+  const emptyRoute = async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: { subtitle: { subtitles: [] }, view_points: [] },
+      }),
+    });
+  };
+
+  await context.route('**/x/player/v2**', emptyRoute);
+  try {
+    await openPanel(page);
+
+    const before = await page.evaluate(async () => {
+      const video = document.querySelector('video');
+      if (!video) throw new Error('没有 video');
+      video.pause();
+      video.currentTime = 42;
+      await new Promise<void>(resolve => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          video.removeEventListener('seeked', finish);
+          resolve();
+        };
+        video.addEventListener('seeked', finish);
+        window.setTimeout(finish, 3000);
+      });
+      // B 站播放器会在 seek 完成后尝试续播，等它稳定再暂停一次。
+      await new Promise<void>(resolve => window.setTimeout(resolve, 300));
+      video.pause();
+      return { time: video.currentTime, paused: video.paused };
+    });
+    expect(before.time).toBeGreaterThan(40);
+    expect(before.paused).toBe(true);
+
+    const beforeRequests = mock.requests.length;
+    await page.locator('.vt-outline-generate').click();
+    await expect(page.locator('.vt-outline-state')).toHaveText('9 段', { timeout: 60_000 });
+
+    // 抓帧结束后回到原时间；先等 seek 完成再看。
+    await page.waitForFunction(
+      target => {
+        const video = document.querySelector('video');
+        return !!video && !video.seeking && Math.abs(video.currentTime - target) < 1;
+      },
+      before.time,
+      { timeout: 10_000 },
+    );
+
+    type MockBody = {
+      model?: string;
+      messages?: Array<{ role: string; content: unknown }>;
+    };
+    const bodies = (mock.requests as Array<{ body: MockBody }>)
+      .slice(beforeRequests)
+      .map((request: { body: MockBody }) => request.body);
+    const body = bodies.find((item: MockBody) => {
+      const last = item.messages?.[item.messages.length - 1];
+      return Array.isArray(last?.content);
+    });
+    expect(body, '应该发出带截图的视觉请求').toBeTruthy();
+    expect(body?.model).toBe('deepseek-vision-e2e');
+    const last = body?.messages?.[body.messages.length - 1];
+    const parts = last?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string; detail?: string };
+    }>;
+    const images = parts.filter(part => part.type === 'image_url');
+    expect(images.length).toBeGreaterThanOrEqual(6);
+    for (const image of images) {
+      expect(image.image_url?.url.startsWith('data:image/jpeg;base64,')).toBe(true);
+      expect(image.image_url?.detail).toBe('low');
+    }
+    expect(parts.some(part => part.type === 'text' && part.text?.includes('第 1 张'))).toBe(true);
+
+    await expect(page.locator('.vt-outline-item')).toHaveCount(9);
+    await page.screenshot({ path: join(SHOT_DIR, 'd5-frames.png'), fullPage: false });
+  } finally {
+    await context.unroute('**/x/player/v2**', emptyRoute);
+  }
 });
 
 test('无字幕但有 UP 章节：直接用章节当大纲，不调模型', async () => {

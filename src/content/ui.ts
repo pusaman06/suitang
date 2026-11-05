@@ -1,11 +1,21 @@
 import styleText from './ui.css?inline';
 import { formatTimestamp, renderAnswerHtml } from '../shared/citations';
 import {
+  outlineFrameTimes,
   type Outline,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
 } from '../shared/outline';
-import { QA_PORT_NAME, type QaAskPayload, type QaRect, type QaServerMessage, type QaViewport, type QaWindowInfo } from '../shared/qa';
+import {
+  QA_PORT_NAME,
+  type FrameCaptureResponse,
+  type QaAskPayload,
+  type QaFrame,
+  type QaRect,
+  type QaServerMessage,
+  type QaViewport,
+  type QaWindowInfo,
+} from '../shared/qa';
 import type { QaRecord } from '../shared/qa-store';
 import { loadSettings, type Settings } from '../shared/settings';
 import type { SyncStatus } from '../shared/sync';
@@ -123,6 +133,10 @@ export function mountUi(info: VideoInfo): UiHandle {
   let outlineExpanded = true;
   let outlineGenerating = false;
   let outlineGetToken = 0;
+  let outlineRunToken = 0;
+  let outlineCapturing = false;
+  let outlineCaptureDone = 0;
+  let outlineCaptureTotal = 0;
   let outlineActiveIndex = -1;
   let outlineRetryAction: (() => void) | null = null;
   let lastOutlineTimeupdate = 0;
@@ -377,7 +391,11 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   function renderOutlineState(): void {
     if (outlineGenerating) {
-      outlineState.textContent = '生成中…';
+      if (outlineCapturing) {
+        outlineState.textContent = `正在抓画面（第 ${outlineCaptureDone} 帧）`;
+      } else {
+        outlineState.textContent = '生成中…';
+      }
     } else if (!outlineError.hidden) {
       outlineState.textContent = '失败';
     } else if (outline) {
@@ -386,7 +404,11 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineState.textContent = '未生成';
     }
     outlineGenerate.disabled = outlineGenerating;
-    outlineGenerate.textContent = outlineGenerating ? '生成中…' : '生成大纲';
+    outlineGenerate.textContent = outlineGenerating
+      ? outlineCapturing
+        ? `抓画面 ${outlineCaptureDone}/${outlineCaptureTotal}`
+        : '生成中…'
+      : '生成大纲';
   }
 
   function setOutlineActive(index: number): void {
@@ -443,7 +465,11 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   function renderOutline(): void {
     outlineGenerate.disabled = outlineGenerating;
-    outlineGenerate.textContent = outlineGenerating ? '生成中…' : '生成大纲';
+    outlineGenerate.textContent = outlineGenerating
+      ? outlineCapturing
+        ? `抓画面 ${outlineCaptureDone}/${outlineCaptureTotal}`
+        : '生成中…'
+      : '生成大纲';
     if (outline) {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;
@@ -476,6 +502,11 @@ export function mountUi(info: VideoInfo): UiHandle {
     outline = null;
     outlineGenerating = false;
     outlineGetToken += 1;
+    // 切 P 时让正在进行的抓帧循环看到 token 变化并中止。
+    outlineRunToken += 1;
+    outlineCapturing = false;
+    outlineCaptureDone = 0;
+    outlineCaptureTotal = 0;
     outlineActiveIndex = -1;
     outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
     outlineList.replaceChildren();
@@ -516,6 +547,118 @@ export function mountUi(info: VideoInfo): UiHandle {
     }
   }
 
+  function setOutlineCaptureProgress(done: number, total: number): void {
+    outlineCapturing = true;
+    outlineCaptureDone = done;
+    outlineCaptureTotal = total;
+    outlineEmpty.hidden = false;
+    outlineList.hidden = true;
+    outlineError.hidden = true;
+    outlineEmptyText.textContent = `正在抓画面 ${done}/${total}…`;
+    renderOutlineState();
+  }
+
+  /** 面板压住画面一大块时才在截图中藏起来；边缘蹭到不算。 */
+  function panelCoversVideo(target: { rect: QaRect }): boolean {
+    const panelRect = panel.getBoundingClientRect();
+    const overlapWidth = Math.max(
+      0,
+      Math.min(panelRect.right, target.rect.x + target.rect.width) -
+        Math.max(panelRect.left, target.rect.x),
+    );
+    const overlapHeight = Math.max(
+      0,
+      Math.min(panelRect.bottom, target.rect.y + target.rect.height) -
+        Math.max(panelRect.top, target.rect.y),
+    );
+    return overlapWidth * overlapHeight > panelRect.width * panelRect.height * 0.15;
+  }
+
+  /** 等 seeked，最多 3 秒；目标时间和当前位置几乎一样时直接返回。 */
+  function seekAndWait(video: HTMLVideoElement, seconds: number): Promise<void> {
+    const duration = Number.isFinite(video.duration) ? video.duration : seconds;
+    const target = Math.max(0, Math.min(seconds, duration));
+    if (Math.abs(video.currentTime - target) < 0.05) return Promise.resolve();
+    return new Promise(resolve => {
+      let done = false;
+      let timer = 0;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        video.removeEventListener('seeked', finish);
+        resolve();
+      };
+      timer = window.setTimeout(finish, 3000);
+      video.addEventListener('seeked', finish);
+      video.currentTime = target;
+    });
+  }
+
+  /**
+   * 无字幕兜底：逐帧暂停、seek、等稳定后请 background 截一张。
+   * 视频状态在 finally 里恢复；切 P 时 run token 变化，循环中止且不把旧时间写回新视频。
+   */
+  async function captureOutlineFrames(
+    times: number[],
+    key: string,
+    run: number,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<QaFrame[]> {
+    const video = getVideoElement();
+    if (!video) throw new Error('找不到视频画面');
+    const firstTarget = getVisibleVideoRect();
+    if (!firstTarget) throw new Error('视频画面没有完整显示，无法抓取画面');
+
+    const originalTime = video.currentTime;
+    const wasPaused = video.paused;
+    const hidePanel = panelCoversVideo(firstTarget);
+    const frames: QaFrame[] = [];
+    let restored = false;
+
+    const restore = async () => {
+      if (restored) return;
+      restored = true;
+      setCapturing(false);
+      const sameVideo = run === outlineRunToken && outlineInfoKey(currentInfo) === key;
+      if (!sameVideo) return;
+      await seekAndWait(video, originalTime);
+      if (!wasPaused) void video.play().catch(() => undefined);
+    };
+
+    try {
+      onProgress(0, times.length);
+      setCapturing(true, hidePanel);
+      for (let index = 0; index < times.length; index += 1) {
+        if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) throw new Error('已取消');
+        video.pause();
+        await seekAndWait(video, times[index]);
+        // 等解码后的那一帧真正上屏；只等 seeked 会截到上一帧。
+        await new Promise<void>(resolve => window.setTimeout(resolve, 250));
+        if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) throw new Error('已取消');
+
+        const target = getVisibleVideoRect();
+        if (!target) throw new Error('视频画面没有完整显示，无法抓取画面');
+        // 每帧重置 5s 兜底计时器，长视频 10 帧也不会中途把面板放回来。
+        setCapturing(true, hidePanel);
+        const response = (await chrome.runtime.sendMessage({
+          type: 'frame:capture',
+          rect: target.rect,
+          viewport: target.viewport,
+        })) as FrameCaptureResponse | undefined;
+        if (!response || !response.ok) {
+          throw new Error(response?.message ?? '截图失败');
+        }
+        // background 不知道这张图对应哪个取样点，at 由 content 按 times 补。
+        frames.push({ ...response.frame, at: times[index] });
+        onProgress(frames.length, times.length);
+      }
+      return frames;
+    } finally {
+      await restore();
+    }
+  }
+
   async function generateOutline(): Promise<void> {
     if (outlineGenerating) return;
     const requested = currentInfo;
@@ -525,43 +668,93 @@ export function mountUi(info: VideoInfo): UiHandle {
       return;
     }
 
+    const run = ++outlineRunToken;
     outlineGenerating = true;
+    outlineCapturing = false;
+    outlineCaptureDone = 0;
+    outlineCaptureTotal = 0;
     clearOutlineError();
     outlineEmpty.hidden = false;
     outlineEmptyText.textContent = '正在生成大纲，请稍候…';
     renderOutlineState();
 
-    try {
-      const response = (await chrome.runtime.sendMessage({
+    const sendGenerate = (frames?: QaFrame[]) =>
+      chrome.runtime.sendMessage({
         type: 'outline:generate',
         bvid: requested.bvid,
         p: requested.p,
         cid: requested.cid,
         title: requested.title,
         duration: requested.duration,
-      })) as OutlineGenerateResponse | undefined;
-      if (outlineInfoKey(currentInfo) !== key) return;
+        frames,
+      }) as Promise<OutlineGenerateResponse | undefined>;
+
+    const fail = (message: string) => {
+      if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
       outlineGenerating = false;
+      outlineCapturing = false;
+      outlineCaptureDone = 0;
+      outlineCaptureTotal = 0;
+      setOutlineError(message, () => void generateOutline());
+    };
+
+    try {
+      let response = await sendGenerate();
+      if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+
       if (!response) {
-        setOutlineError('大纲生成失败，请重试', () => void generateOutline());
+        fail('大纲生成失败，请重试');
+        return;
+      }
+
+      // 第一级/第二级都没有：字幕接口判了 no-subtitle，且章节不足 2 段。
+      if (!response.ok && response.code === 'no-subtitle') {
+        const times = outlineFrameTimes(requested.duration);
+        let frames: QaFrame[] = [];
+        try {
+          frames = await captureOutlineFrames(times, key, run, setOutlineCaptureProgress);
+        } catch (error) {
+          if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          if (detail === '已取消') return;
+          fail(`没有字幕，抓取画面也失败了：${detail}`);
+          return;
+        }
+        if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+        if (frames.length === 0) {
+          fail('没有字幕，也没有抓到可用的画面，暂时不能生成大纲。');
+          return;
+        }
+
+        outlineCapturing = false;
+        outlineCaptureDone = 0;
+        outlineCaptureTotal = 0;
+        outlineEmpty.hidden = false;
+        outlineEmptyText.textContent = '正在生成大纲，请稍候…';
+        renderOutlineState();
+        response = await sendGenerate(frames);
+        if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+      }
+
+      if (!response) {
+        fail('大纲生成失败，请重试');
         return;
       }
       if (!response.ok) {
-        setOutlineError(response.message || '大纲生成失败，请重试', () => void generateOutline());
+        fail(response.message || '大纲生成失败，请重试');
         return;
       }
+
+      outlineGenerating = false;
+      outlineCapturing = false;
       outline = response.outline;
       clearOutlineError();
       outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
       renderOutline();
       window.setTimeout(() => void refreshSync(), 600);
     } catch (error) {
-      if (outlineInfoKey(currentInfo) !== key) return;
-      outlineGenerating = false;
-      setOutlineError(
-        `大纲生成失败：${error instanceof Error ? error.message : String(error)}`,
-        () => void generateOutline(),
-      );
+      if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+      fail(`大纲生成失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1013,6 +1206,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     toggle,
     update: render,
     destroy() {
+      outlineRunToken += 1;
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onResize);
       document.removeEventListener('play', onPlayPause, true);

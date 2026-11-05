@@ -250,6 +250,7 @@
 2. `chrome.storage.local` 查缓存：同一 bvid+p+cid 已索引 → 直接显示「已预习」，跳过。
 3. 拉字幕列表 → 下载字幕 JSON → 转成 segments → 存本地。
 4. 异步生成大纲（文本模型，一次调用）→ 存 `outline` → 显示「预习卡」。
+   - 无字幕且 UP 章节不足 2 段时，按时间抽 6–10 帧送视觉模型生成大纲（`model: frames-vision`）。
 5. 若 companion 在线 → `PUT` 同步。
 
 **失败处理**

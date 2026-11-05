@@ -32,6 +32,17 @@ export interface QaViewport {
   height: number;
 }
 
+/** 大纲抽帧时由 content 请求 background 截一张当前画面（不经过问答 port）。 */
+export type FrameCaptureRequest = {
+  type: 'frame:capture';
+  rect: QaRect;
+  viewport: QaViewport;
+};
+
+export type FrameCaptureResponse =
+  | { ok: true; frame: QaFrame }
+  | { ok: false; message: string };
+
 export interface QaAskPayload {
   bvid: string;
   aid?: number;

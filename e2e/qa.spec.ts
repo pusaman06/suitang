@@ -358,14 +358,15 @@ test('提问不打断播放，面板也不闪一下', async () => {
   // 记录面板 visibility 的每一次变化，用来抓「消失一瞬间」。
   await page.evaluate(() => {
     const scope = window as unknown as { __vis?: string[] };
-    scope.__vis = [];
+    const vis: string[] = [];
+    scope.__vis = vis;
     const panel = document
       .getElementById('video-tutor-host')
       ?.shadowRoot?.querySelector<HTMLElement>('.vt-panel');
     if (!panel) return;
-    scope.__vis.push(panel.style.visibility || '');
+    vis.push(panel.style.visibility || '');
     new MutationObserver(() => {
-      scope.__vis.push(panel.style.visibility || '');
+      vis.push(panel.style.visibility || '');
     }).observe(panel, { attributes: true, attributeFilter: ['style'] });
   });
 

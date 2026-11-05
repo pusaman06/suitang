@@ -1,6 +1,6 @@
 import { formatTimestamp } from './citations';
 import { compactCuesForOutline, type OutlineLine, type OutlineRange, segmentRange } from './outline';
-import type { ChatMessage } from './qa';
+import type { ChatContentPart, ChatMessage, QaFrame } from './qa';
 import type { SubtitleCue } from './types';
 
 export interface OutlinePromptInput {
@@ -14,6 +14,17 @@ export interface OutlinePrompt {
   messages: ChatMessage[];
   range: OutlineRange;
   lines: number;
+}
+
+export interface FrameOutlinePromptInput {
+  title: string;
+  duration: number;
+  frames: QaFrame[];
+}
+
+export interface FrameOutlinePrompt {
+  messages: ChatMessage[];
+  range: OutlineRange;
 }
 
 export function outlineSystemPrompt(range: OutlineRange, title: string, duration: number): string {
@@ -51,5 +62,51 @@ export function buildOutlinePrompt(input: OutlinePromptInput): OutlinePrompt | n
     ],
     range,
     lines: lines.length,
+  };
+}
+
+/**
+ * 无字幕/无章节时的视觉大纲 prompt：按时间顺序把截图和对应时间戳交叠发给模型。
+ * 图片用 low detail（每张约 384 token），大字卡片也够读。
+ */
+export function buildFrameOutlinePrompt(input: FrameOutlinePromptInput): FrameOutlinePrompt | null {
+  const frames = input.frames.filter(
+    frame =>
+      typeof frame.dataUrl === 'string' &&
+      frame.dataUrl.startsWith('data:image/jpeg;base64,') &&
+      Number.isFinite(frame.at),
+  );
+  if (frames.length === 0) return null;
+
+  const range = segmentRange(input.duration);
+  const system = [
+    `你是课程笔记助手。下面是视频《${input.title}》（时长 ${formatTimestamp(input.duration)}）按时间顺序抽取的截图。`,
+    `请据此把视频分成 ${range.min}–${range.max} 个主题段，输出 JSON 数组，每项 {start, end, title}，start 和 end 是整数秒。`,
+    'title 用 8–16 个汉字，概括这一段在讲什么。',
+    '硬约束：',
+    '1. 按时间顺序首尾相接覆盖全片：首段 start=0，末段 end ≥ 视频时长。',
+    '2. 时间只能参考每张截图的标注，不要编造画面里没有的内容。',
+    '3. 只输出 JSON 数组，不要 markdown 围栏，不要解释。',
+  ].join('\n');
+
+  const content: ChatContentPart[] = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index];
+    content.push({
+      type: 'text',
+      text: `第 ${index + 1} 张，时间 ${formatTimestamp(frame.at)}`,
+    });
+    content.push({
+      type: 'image_url',
+      image_url: { url: frame.dataUrl, detail: 'low' },
+    });
+  }
+
+  return {
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content },
+    ],
+    range,
   };
 }

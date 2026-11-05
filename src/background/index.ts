@@ -6,9 +6,9 @@ import type {
   VideoMeta,
 } from '../shared/types';
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
-import { loadSettings } from '../shared/settings';
+import { loadSettings, type Settings } from '../shared/settings';
 import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
-import { buildOutlinePrompt } from '../shared/outline-prompt';
+import { buildFrameOutlinePrompt, buildOutlinePrompt } from '../shared/outline-prompt';
 import {
   coalesceSegments,
   outlineStorageKey,
@@ -38,7 +38,9 @@ import {
   type QaClientMessage,
   type QaErrorInfo,
   type QaFrame,
+  type QaRect,
   type QaServerMessage,
+  type QaViewport,
   type QaUsage,
 } from '../shared/qa';
 import { callDeepSeek, QaAbortError, QaError } from './deepseek';
@@ -483,6 +485,8 @@ interface OutlineRequest {
   cid?: number;
   title: string;
   duration: number;
+  /** 无字幕兜底：content 已按时间抽好的截图；有值时直接走视觉分支。 */
+  frames?: QaFrame[];
 }
 
 class OutlineFailure extends Error {
@@ -615,12 +619,143 @@ function chaptersToSegments(points: ViewPoint[], duration?: number): OutlineSegm
   return coalesceSegments(segments, 15);
 }
 
+/** 只接受 content 抓帧链路产出的 JPEG dataURL，防止任意大图/坏数据进模型。 */
+function isQaFrame(value: unknown): value is QaFrame {
+  if (!value || typeof value !== 'object') return false;
+  const frame = value as Partial<QaFrame>;
+  return (
+    typeof frame.dataUrl === 'string' &&
+    frame.dataUrl.startsWith('data:image/jpeg;base64,') &&
+    typeof frame.width === 'number' &&
+    Number.isFinite(frame.width) &&
+    frame.width > 0 &&
+    typeof frame.height === 'number' &&
+    Number.isFinite(frame.height) &&
+    frame.height > 0 &&
+    typeof frame.at === 'number' &&
+    Number.isFinite(frame.at)
+  );
+}
+
+function readOutlineFrames(value: unknown): QaFrame[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isQaFrame).slice(0, 10);
+}
+
+function readCaptureRect(value: unknown): QaRect | null {
+  if (!value || typeof value !== 'object') return null;
+  const rect = value as Partial<QaRect>;
+  if (
+    typeof rect.x !== 'number' ||
+    typeof rect.y !== 'number' ||
+    typeof rect.width !== 'number' ||
+    typeof rect.height !== 'number' ||
+    !Number.isFinite(rect.x) ||
+    !Number.isFinite(rect.y) ||
+    !Number.isFinite(rect.width) ||
+    !Number.isFinite(rect.height) ||
+    rect.width <= 0 ||
+    rect.height <= 0
+  ) {
+    return null;
+  }
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+}
+
+function readCaptureViewport(value: unknown): QaViewport | null {
+  if (!value || typeof value !== 'object') return null;
+  const viewport = value as Partial<QaViewport>;
+  if (
+    typeof viewport.width !== 'number' ||
+    typeof viewport.height !== 'number' ||
+    !Number.isFinite(viewport.width) ||
+    !Number.isFinite(viewport.height) ||
+    viewport.width <= 0 ||
+    viewport.height <= 0
+  ) {
+    return null;
+  }
+  return { width: viewport.width, height: viewport.height };
+}
+
+/** 无字幕兜底：全部截图一次请求视觉模型，再走和文本大纲相同的解析/缓存。 */
+async function generateFrameOutline(
+  settings: Settings,
+  request: OutlineRequest,
+  frames: QaFrame[],
+): Promise<Outline> {
+  const prompt = buildFrameOutlinePrompt({
+    title: request.title,
+    duration: request.duration,
+    frames,
+  });
+  if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
+
+  let text = '';
+  const result = await callDeepSeek({
+    apiKey: settings.apiKey,
+    baseUrl: settings.apiBaseUrl,
+    model: settings.visionModel,
+    messages: prompt.messages,
+    thinking: false,
+    maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
+    temperature: 0.2,
+    onChunk: (kind, chunk) => {
+      if (kind === 'answer') text += chunk;
+    },
+  });
+
+  const raw = text.trim() !== '' ? text : result.text;
+  if (raw.trim() === '') {
+    throw new OutlineFailure('empty', '模型没有返回内容，请重试');
+  }
+
+  const segments = parseOutline(raw, request.duration, prompt.range);
+  if (!segments) {
+    log('frame outline raw output', raw.slice(0, 1500));
+    throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+  }
+
+  const outline: Outline = {
+    bvid: request.bvid,
+    p: request.p,
+    cid: request.cid,
+    duration: request.duration,
+    segments,
+    createdAt: Date.now(),
+    model: 'frames-vision',
+  };
+  await chrome.storage.local.set({
+    [outlineStorageKey(request.bvid, request.p, request.cid)]: outline,
+  });
+  void syncPageSnapshot({
+    bvid: request.bvid,
+    p: request.p,
+    cid: request.cid,
+    title: request.title,
+    duration: request.duration,
+    cues: [],
+    outline: segments,
+  }).catch(error => log('outline sync failed', error));
+  return outline;
+}
+
 async function generateOutline(
   tabId: number,
   request: OutlineRequest,
 ): Promise<OutlineGenerateResponse> {
   try {
     const settings = await loadSettings();
+
+    // 视觉兜底：content 已经抽好帧，不再碰字幕/章节，直接一次视觉请求。
+    const frames = request.frames ?? [];
+    if (frames.length > 0) {
+      if (!settings.apiKey.trim()) {
+        throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
+      }
+      return { ok: true, outline: await generateFrameOutline(settings, request, frames) };
+    }
+
     let cues: SubtitleCue[] = [];
     let chapters: OutlineSegment[] = [];
     try {
@@ -1080,6 +1215,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'frame:capture') {
+    const rect = readCaptureRect(message.rect);
+    const viewport = readCaptureViewport(message.viewport);
+    const windowId = sender.tab?.windowId;
+    if (!rect || !viewport || windowId === undefined) {
+      sendResponse({ ok: false, message: '截图参数不合法' });
+      return false;
+    }
+    void captureFrame(windowId, rect, viewport, 0)
+      .then(frame => sendResponse({ ok: true, frame }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '截图失败',
+        }),
+      );
+    return true;
+  }
+
   if (message?.type === 'outline:get') {
     const bvid = typeof message.bvid === 'string' ? message.bvid : '';
     const p =
@@ -1140,7 +1294,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    const request: OutlineRequest = { bvid, p, cid, title, duration };
+    const rawFrames = Array.isArray(message.frames) ? message.frames : [];
+    const frames = readOutlineFrames(rawFrames);
+    if (rawFrames.length > 0 && frames.length === 0) {
+      sendResponse({
+        ok: false,
+        code: 'bad-output',
+        message: '截图数据无效，请重试',
+      } satisfies OutlineGenerateResponse);
+      return false;
+    }
+
+    const request: OutlineRequest = {
+      bvid,
+      p,
+      cid,
+      title,
+      duration,
+      frames: frames.length > 0 ? frames : undefined,
+    };
     const jobKey = `${tabId}:${bvid}:${p}`;
     let job = outlineJobs.get(jobKey);
     if (!job) {

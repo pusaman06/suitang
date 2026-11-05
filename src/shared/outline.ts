@@ -57,6 +57,21 @@ export function segmentRange(duration: number): OutlineRange {
   return { min: 8, max: 15 };
 }
 
+/** 无字幕兜底抽帧数：视频越长，画面信息越分散，需要更多帧。 */
+export function outlineFrameCount(duration: number): number {
+  if (!Number.isFinite(duration) || duration <= 0) return 6;
+  if (duration <= 120) return 6;
+  if (duration <= 600) return 8;
+  return 10;
+}
+
+/** 均匀取样并避开首尾：取每段中点，而不是从 0 秒开始。 */
+export function outlineFrameTimes(duration: number): number[] {
+  if (!Number.isFinite(duration) || duration <= 0) return [];
+  const count = outlineFrameCount(duration);
+  return Array.from({ length: count }, (_, index) => ((index + 0.5) / count) * duration);
+}
+
 /**
  * 把字幕按固定时间窗合并成行，from 取窗口内第一条字幕的时间。
  * 输入若乱序会先排序；空文本直接跳过。
