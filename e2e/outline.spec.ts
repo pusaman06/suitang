@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { join } from 'node:path';
 import { mergeCuesByWindow, parseOutline, segmentRange, toSeconds } from '../src/shared/outline';
 import {
@@ -314,4 +314,41 @@ test('mock 500 显示错误和重试，重试成功后问答仍可用', async ()
   await page.locator('.vt-input').fill('这段在讲什么？');
   await page.locator('.vt-send').click();
   await expect(page.locator('.vt-a').last()).toContainText('测试全文结束', { timeout: 20_000 });
+});
+
+test('无字幕但有 UP 章节：直接用章节当大纲，不调模型', async () => {
+  await clearStorage(context, extensionId);
+  await outlineSettings();
+  await clearOutlineCache();
+
+  const chapterRoute = async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          subtitle: { subtitles: [] },
+          view_points: [
+            { from: 0, to: 40, content: '开场与自我介绍' },
+            { from: 40, to: 80, content: '感知机的历史' },
+            { from: 80, to: 120, content: 'M-P 神经元模型' },
+          ],
+        },
+      }),
+    });
+  };
+
+  await context.route('**/x/player/v2**', chapterRoute);
+  try {
+    await openPanel(page);
+    const before = mock.requests.length;
+    await page.locator('.vt-outline-generate').click();
+    await expect(page.locator('.vt-outline-item')).toHaveCount(3, { timeout: 20_000 });
+    await expect(page.locator('.vt-outline-item').first()).toContainText('开场与自我介绍');
+    // 章节是现成的，不应该再花钱问模型。
+    expect(mock.requests.length).toBe(before);
+  } finally {
+    await context.unroute('**/x/player/v2**', chapterRoute);
+  }
 });

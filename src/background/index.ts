@@ -10,12 +10,14 @@ import { loadSettings } from '../shared/settings';
 import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
 import { buildOutlinePrompt } from '../shared/outline-prompt';
 import {
+  coalesceSegments,
   outlineStorageKey,
   parseOutline,
   type Outline,
   type OutlineErrorCode,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
+  type OutlineSegment,
 } from '../shared/outline';
 import { extractCitationSeconds } from '../shared/citations';
 import {
@@ -565,6 +567,54 @@ function outlineError(error: unknown): OutlineGenerateResponse {
   };
 }
 
+type ViewPoint = { from: number; to: number; content: string };
+
+/** B 站 UP 手标章节（x/player/v2 的 view_points），无字幕视频的兜底大纲来源。 */
+async function fetchViewPoints(
+  tabId: number,
+  aid: number,
+  cid: number,
+  bvid: string,
+): Promise<ViewPoint[]> {
+  const url = `https://api.bilibili.com/x/player/v2?aid=${aid}&cid=${cid}&bvid=${bvid}`;
+  const response = await fetchTextInPage(tabId, url);
+  if (response.error || response.status !== 200) return [];
+  try {
+    const parsed = JSON.parse(response.text) as {
+      code?: number;
+      data?: { view_points?: ViewPoint[] };
+    };
+    if (parsed.code !== 0) return [];
+    return (parsed.data?.view_points ?? []).filter(
+      item => Number.isFinite(item.from) && Number.isFinite(item.to) && item.to > item.from,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function chaptersToSegments(points: ViewPoint[], duration?: number): OutlineSegment[] {
+  const total = duration && duration > 0 ? duration : (points[points.length - 1]?.to ?? 0);
+  const segments = points
+    .map(item => ({
+      start: Math.max(0, Math.floor(item.from)),
+      end: Math.ceil(item.to),
+      title: item.content.trim(),
+    }))
+    .filter(item => item.title !== '' && item.end > item.start)
+    .sort((a, b) => a.start - b.start);
+  if (segments.length === 0) return [];
+
+  segments[0].start = 0;
+  for (let index = 1; index < segments.length; index += 1) {
+    if (segments[index].start > segments[index - 1].end) {
+      segments[index - 1].end = segments[index].start;
+    }
+  }
+  if (total > 0) segments[segments.length - 1].end = total;
+  return coalesceSegments(segments, 15);
+}
+
 async function generateOutline(
   tabId: number,
   request: OutlineRequest,
@@ -575,7 +625,46 @@ async function generateOutline(
       throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
     }
 
-    const cues = await outlineCues(tabId, request);
+    let cues: SubtitleCue[] = [];
+    let chapters: OutlineSegment[] = [];
+    try {
+      cues = await outlineCues(tabId, request);
+    } catch (error) {
+      if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
+      const meta = await readVideoMeta(tabId);
+      if (meta?.aid && request.cid) {
+        const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
+        chapters = chaptersToSegments(points, request.duration);
+      }
+      if (chapters.length < 2) throw error;
+    }
+
+    // 有 UP 章节就不必调模型：章节本身就是人写好的大纲。
+    if (chapters.length >= 2) {
+      const outline: Outline = {
+        bvid: request.bvid,
+        p: request.p,
+        cid: request.cid,
+        duration: request.duration,
+        segments: chapters,
+        createdAt: Date.now(),
+        model: 'bilibili-chapters',
+      };
+      await chrome.storage.local.set({
+        [outlineStorageKey(request.bvid, request.p, request.cid)]: outline,
+      });
+      void syncPageSnapshot({
+        bvid: request.bvid,
+        p: request.p,
+        cid: request.cid,
+        title: request.title,
+        duration: request.duration,
+        cues: [],
+        outline: chapters,
+      }).catch(error => log('outline sync failed', error));
+      return { ok: true, outline };
+    }
+
     const prompt = buildOutlinePrompt({
       title: request.title,
       duration: request.duration,
