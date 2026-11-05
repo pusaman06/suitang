@@ -121,3 +121,40 @@ export function seekVideo(seconds: number, options: { autoPlay?: boolean } = {})
   }
   return true;
 }
+
+/** 截图前藏起的弹幕元素，恢复时按原值还原。 */
+let hiddenDanmaku: Array<{ el: HTMLElement; prev: string }> = [];
+
+/** B 站播放器各版本的弹幕层；新版 bpx-player，旧版兜底。 */
+const DANMAKU_SELECTORS = [
+  '.bpx-player-dm-mask-wrap',
+  '.bpx-player-adv-dm-wrap',
+  '.bpx-player-row-dm-wrap',
+  '.bpx-player-bas-dm-wrap',
+  '.bpx-player-cmd-dm-wrap',
+  '.bpx-player-cmd-dm-inside',
+  '.bpx-player-new-dialogue-area',
+  '.bilibili-player-video-danmaku',
+  '#danmukuBox',
+];
+
+/**
+ * 截图期间隐藏弹幕层：弹幕浮在画面上，会把 PPT 文字盖掉，
+ * 模型看到的就是一片「666」「哈哈哈哈」。
+ * 只改元素的 inline visibility，恢复时写回原值。
+ */
+export function setDanmakuHidden(on: boolean): void {
+  if (on) {
+    if (hiddenDanmaku.length > 0) return;
+    for (const selector of DANMAKU_SELECTORS) {
+      document.querySelectorAll<HTMLElement>(selector).forEach(el => {
+        if (getComputedStyle(el).visibility === 'hidden') return;
+        hiddenDanmaku.push({ el, prev: el.style.visibility });
+        el.style.visibility = 'hidden';
+      });
+    }
+    return;
+  }
+  for (const { el, prev } of hiddenDanmaku) el.style.visibility = prev;
+  hiddenDanmaku = [];
+}

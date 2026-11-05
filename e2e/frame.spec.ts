@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { computeCropBox } from '../src/background/frame';
 import {
@@ -221,6 +222,10 @@ test('带画面提问：请求 content 是 image_url 数组且 detail=high', asy
   expect(stats.variance).toBeGreaterThan(100);
   expect(parts[1]?.type).toBe('text');
   expect((parts[1] as Extract<ContentPart, { type: 'text' }>).text).toContain('这页写的什么');
+
+  // 把真正发给模型的那张图落盘，方便人工核对裁剪质量和清晰度。
+  const base64 = image.url.split(',')[1] ?? '';
+  writeFileSync(join(SHOT_DIR, 'd4-frame-sent.jpg'), Buffer.from(base64, 'base64'));
 
   await page.screenshot({ path: join(SHOT_DIR, 'd4-frame.png'), fullPage: false });
 });

@@ -3,7 +3,7 @@ import { renderAnswerHtml } from '../shared/citations';
 import { QA_PORT_NAME, type QaAskPayload, type QaRect, type QaServerMessage, type QaViewport, type QaWindowInfo } from '../shared/qa';
 import { loadSettings, type Settings } from '../shared/settings';
 import type { VideoInfo } from '../shared/types';
-import { getPlaybackTime, getVideoElement, getVisibleVideoRect, seekVideo } from './page';
+import { getPlaybackTime, getVideoElement, getVisibleVideoRect, seekVideo, setDanmakuHidden } from './page';
 
 const HOST_ID = 'video-tutor-host';
 
@@ -96,11 +96,12 @@ export function mountUi(info: VideoInfo): UiHandle {
     frameHint.hidden = text === '';
   };
 
-  /** 截图时把悬浮球和面板藏起来，免得截进画面；收到 qa:start / 报错就恢复。 */
+  /** 截图时把悬浮球、面板和弹幕藏起来，免得截进画面；收到 qa:start / 报错就恢复。 */
   const setCapturing = (on: boolean) => {
     if (capturing === on) return;
     capturing = on;
     host.style.visibility = on ? 'hidden' : '';
+    setDanmakuHidden(on);
     if (on) {
       if (captureTimer !== 0) window.clearTimeout(captureTimer);
       // 兜底：后台无响应时 5s 后把 UI 放回来，避免面板一直消失。
