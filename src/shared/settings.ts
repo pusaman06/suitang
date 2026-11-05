@@ -53,7 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jumpAutoPlay: false,
   frameEnabled: true,
   companionUrl: DEFAULT_COMPANION_URL,
-  syncEnabled: true,
+  syncEnabled: false,
   asrApiKey: '',
   asrBaseUrl: DEFAULT_ASR_BASE_URL,
   asrModel: DEFAULT_ASR_MODEL,
