@@ -118,6 +118,7 @@ export type QaAbortReason = 'user' | 'superseded' | 'p-changed' | 'tab-closed';
 
 export type QaServerMessage =
   | { v: 1; type: 'qa:start'; requestId: string; model: string; window: QaWindowInfo }
+  | { v: 1; type: 'qa:frame'; requestId: string }
   | { v: 1; type: 'qa:chunk'; requestId: string; kind: QaChunkKind; text: string }
   | {
       v: 1;

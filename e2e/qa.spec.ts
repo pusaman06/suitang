@@ -345,3 +345,49 @@ test('拖悬浮球带走面板、面板自动换边、发送后清空、键盘�
   await page.locator('.vt-send').click();
   await expect(input).toHaveValue('');
 });
+
+test('提问不打断播放，面板也不闪一下', async () => {
+  await clearStorage(context, extensionId);
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-test',
+    apiBaseUrl: baseUrl,
+    frameEnabled: true,
+  });
+  await openPanel(page, VIDEO_URL);
+
+  // 记录面板 visibility 的每一次变化，用来抓「消失一瞬间」。
+  await page.evaluate(() => {
+    const scope = window as unknown as { __vis?: string[] };
+    scope.__vis = [];
+    const panel = document
+      .getElementById('video-tutor-host')
+      ?.shadowRoot?.querySelector<HTMLElement>('.vt-panel');
+    if (!panel) return;
+    scope.__vis.push(panel.style.visibility || '');
+    new MutationObserver(() => {
+      scope.__vis.push(panel.style.visibility || '');
+    }).observe(panel, { attributes: true, attributeFilter: ['style'] });
+  });
+
+  await page.evaluate(async () => {
+    const video = document.querySelector('video');
+    if (!video) return;
+    video.muted = true;
+    await video.play().catch(() => undefined);
+  });
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => document.querySelector('video')?.paused)).toBe(false);
+
+  await page.locator('.vt-input').fill('这段在讲什么？');
+  await page.locator('.vt-input').press('Enter');
+  await expect(page.locator('.vt-status')).toContainText('完成', { timeout: 20_000 });
+
+  // 播放没有被我们暂停掉（原本在播，问完还在播）。
+  expect(await page.evaluate(() => document.querySelector('video')?.paused)).toBe(false);
+
+  // 面板全程没有进入 hidden 状态。
+  const visLog = await page.evaluate(
+    () => (window as unknown as { __vis: string[] }).__vis ?? [],
+  );
+  expect(visLog.filter(value => value === 'hidden')).toHaveLength(0);
+});

@@ -113,7 +113,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   let lastWindow: QaWindowInfo | null = null;
   let askedFrame = false;
   let asking = false;
-  let capturing = false;
   let captureTimer = 0;
   let syncTimer = 0;
   let syncBusy = false;
@@ -331,11 +330,10 @@ export function mountUi(info: VideoInfo): UiHandle {
       });
   });
 
-  /** 截图时把悬浮球、面板和弹幕藏起来，免得截进画面；收到 qa:start / 报错就恢复。 */
-  const setCapturing = (on: boolean) => {
-    if (capturing === on) return;
-    capturing = on;
-    host.style.visibility = on ? 'hidden' : '';
+  /** 截图时藏起会入镜的东西：弹幕总是藏；面板只有压住画面时才藏，免得闪一下。 */
+  const setCapturing = (on: boolean, hidePanel = true) => {
+    ball.style.visibility = on ? 'hidden' : '';
+    panel.style.visibility = on && hidePanel ? 'hidden' : '';
     setDanmakuHidden(on);
     if (on) {
       if (captureTimer !== 0) window.clearTimeout(captureTimer);
@@ -695,12 +693,24 @@ export function mountUi(info: VideoInfo): UiHandle {
     scrollAnswers();
   };
 
+  /** 为截图暂停的视频，等后台截完就恢复播放。 */
+  let resumeAfterFrame = false;
+  const restorePlayback = () => {
+    if (!resumeAfterFrame) return;
+    resumeAfterFrame = false;
+    const video = getVideoElement();
+    if (video && video.paused) void video.play().catch(() => undefined);
+  };
+
   const handleServerMessage = (message: QaServerMessage) => {
     if (!message || message.type === 'qa:pong') return;
     if (message.requestId !== activeRequestId) return;
     // 后台发回任何消息都说明截图阶段已结束（qa:start 在截图之后才发）。
     setCapturing(false);
+    restorePlayback();
     switch (message.type) {
+      case 'qa:frame':
+        return;
       case 'qa:start': {
         const { window } = message;
         lastWindow = window;
@@ -789,9 +799,6 @@ export function mountUi(info: VideoInfo): UiHandle {
       lastQuestion = trimmed;
 
       const video = getVideoElement();
-      const justPaused = Boolean(video && !video.paused);
-      if (video && justPaused) video.pause();
-
       askedFrame = false;
       setFrameHint('');
       let target: { rect: QaRect; viewport: QaViewport } | null = null;
@@ -799,6 +806,11 @@ export function mountUi(info: VideoInfo): UiHandle {
         target = getVisibleVideoRect();
         if (!target) setFrameHint('视频画面没有完整显示，先滚动到画面再问');
       }
+      // 只有真要截图时才暂停：截完 background 会发 qa:frame，这里立刻恢复播放。
+      resumeAfterFrame = Boolean(target && video && !video.paused);
+      if (resumeAfterFrame && video) video.pause();
+      // 兜底：万一后台没回消息，3 秒后也别让视频一直停着。
+      window.setTimeout(restorePlayback, 3000);
 
       const payload: QaAskPayload = {
         bvid: currentInfo.bvid,
@@ -818,11 +830,25 @@ export function mountUi(info: VideoInfo): UiHandle {
         askedFrame = true;
       }
 
-      // 刚暂停时等最后一帧稳定，避免截到旧帧；本来已暂停则不需要等。
-      if (askedFrame && justPaused) await sleep(300);
-      if (askedFrame) {
+      // 刚为我们暂停时等最后一帧稳定，避免截到旧帧；本来已暂停则不需要等。
+      if (askedFrame && resumeAfterFrame) await sleep(300);
+      if (askedFrame && target) {
         setFrameHint('附当前画面');
-        setCapturing(true);
+        // 只有面板遮住画面一大块时才藏；边缘蹭到一条不算，免得每次提问都闪一下。
+        const panelRect = panel.getBoundingClientRect();
+        const overlapWidth = Math.max(
+          0,
+          Math.min(panelRect.right, target.rect.x + target.rect.width) -
+            Math.max(panelRect.left, target.rect.x),
+        );
+        const overlapHeight = Math.max(
+          0,
+          Math.min(panelRect.bottom, target.rect.y + target.rect.height) -
+            Math.max(panelRect.top, target.rect.y),
+        );
+        const covered = overlapWidth * overlapHeight;
+        const hidePanel = covered > panelRect.width * panelRect.height * 0.15;
+        setCapturing(true, hidePanel);
       }
 
       const requestId = `q${Date.now()}-${Math.floor(Math.random() * 1e6)}`;

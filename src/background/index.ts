@@ -783,6 +783,8 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
         postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
         return;
       }
+      // 图已经拿到，通知页面可以恢复播放（视频是被 content 为了截图暂停的）。
+      postToPort(port, { v: 1, type: 'qa:frame', requestId });
     }
 
     const cues = await qaCues(tabId, payload);
