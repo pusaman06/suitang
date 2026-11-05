@@ -7,7 +7,7 @@ import type {
 } from '../shared/types';
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
 import { loadSettings } from '../shared/settings';
-import { buildQaPrompt } from '../shared/prompt';
+import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
 import { buildOutlinePrompt } from '../shared/outline-prompt';
 import {
   outlineStorageKey,
@@ -340,11 +340,29 @@ interface ActiveQa {
 
 const activeByTab = new Map<number, ActiveQa>();
 
+/**
+ * 最近几轮问答，供「那你…」这类追问使用。只在内存里，service worker
+ * 重启会丢；切片 2 的 qaStore 落地后换成读存储。
+ */
+const qaHistory = new Map<string, Array<{ q: string; a: string }>>();
+
 function postToPort(port: chrome.runtime.Port, message: QaServerMessage): void {
   try {
     port.postMessage(message);
   } catch {
     // 端口已断开（页面刷新/关闭），忽略。
+  }
+}
+
+/** 全局问题才需要：读已生成的大纲，给模型一个全片骨架。读不到就返回 undefined。 */
+async function outlineForQuestion(payload: QaAskPayload): Promise<Outline['segments'] | undefined> {
+  try {
+    const key = outlineStorageKey(payload.bvid, payload.p, payload.cid);
+    const stored = await chrome.storage.local.get(key);
+    const record = stored[key] as Outline | undefined;
+    return record?.segments && record.segments.length > 0 ? record.segments : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -686,6 +704,12 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
 
     const model = frame ? settings.visionModel : settings.textModel;
 
+    // 「整节课讲了什么」这类问题只给 ±90 秒答不了：改成全片抽稀字幕 + 已生成大纲。
+    const globalQuestion = isGlobalQuestion(payload.question);
+    const outline = globalQuestion ? await outlineForQuestion(payload) : undefined;
+    const historyKey = `${payload.bvid}:${payload.p}`;
+    const history = qaHistory.get(historyKey) ?? [];
+
     const prompt = buildQaPrompt({
       title: payload.title,
       partTitle: payload.partTitle,
@@ -696,7 +720,10 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       cues,
       windowSec: settings.contextWindowSec,
       maxInputTokens: 3500,
-      historyTurns: 0,
+      historyTurns: settings.historyTurns,
+      history,
+      mode: globalQuestion ? 'global' : 'auto',
+      outline,
       frame: frame ? { dataUrl: frame.dataUrl } : undefined,
     });
 
@@ -743,6 +770,14 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       });
       return;
     }
+
+    // 只有成功的回答才进历史；失败的半截别污染下一轮追问的指代。
+    const turns = qaHistory.get(historyKey) ?? [];
+    turns.push({ q: payload.question, a: text });
+    const keep = Math.max(0, Math.min(5, Math.floor(settings.historyTurns)));
+    while (turns.length > keep) turns.shift();
+    if (keep === 0) qaHistory.delete(historyKey);
+    else qaHistory.set(historyKey, turns);
 
     postToPort(port, {
       v: 1,

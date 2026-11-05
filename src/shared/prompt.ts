@@ -23,6 +23,21 @@ export const QA_NO_SUBTITLE_NOTE =
 export const QA_FRAME_NOTE =
   '用户附带了当前视频画面截图。画面中的文字可以直接引用；引用画面内容时用「画面中」开头。不要编造画面里没有的内容。';
 
+/** 全局问题（整节/全片/总结）：±90 秒窗口答不了，改用全片抽稀字幕 + 已生成大纲。 */
+export const QA_GLOBAL_NOTE =
+  '用户问的是整段视频的整体问题，下面附的是全片字幕按时间抽稀后的摘要，时间不连续。请按时间顺序概括，不要因为摘要里没出现某句台词就断言视频没讲过。';
+
+/**
+ * 判断是不是「整节课」级别的提问。只影响给模型多少上下文，
+ * 判错也只是多给或少给内容，不会改变回答口径。
+ */
+const GLOBAL_QUESTION_PATTERN =
+  /(整节|整堂|整个视频|整段视频|全片|全视频|从头到尾|通篇|全部内容|整体|一共|总共|总结|概括|大纲|脉络|知识点|知识结构|章节|结构|讲了(哪|几)|分成几|分几个)/;
+
+export function isGlobalQuestion(question: string): boolean {
+  return GLOBAL_QUESTION_PATTERN.test(question);
+}
+
 export interface QaPromptTurn {
   q: string;
   a: string;
@@ -47,6 +62,10 @@ export interface QaPromptInput {
   history?: QaPromptTurn[];
   /** 已裁剪好的暂停帧；有值时最后一条 user 消息改成 image + text。 */
   frame?: { dataUrl: string };
+  /** local = 只给播放点附近；global = 全片抽稀；auto 按问题判断（默认）。 */
+  mode?: 'auto' | 'local' | 'global';
+  /** 全局问题时附带的已生成大纲，帮助模型建立全片结构。 */
+  outline?: Array<{ start: number; end: number; title: string }>;
 }
 
 export interface QaPromptWindow {
@@ -98,18 +117,35 @@ function courseLine(input: QaPromptInput): string {
   return parts.join(' · ');
 }
 
-function buildUserText(input: QaPromptInput, usedCues: SubtitleCue[], windowSec: number): string {
+function buildUserText(
+  input: QaPromptInput,
+  usedCues: SubtitleCue[],
+  windowSec: number,
+  global: boolean,
+): string {
   const lines: string[] = [];
   lines.push(`视频：${courseLine(input)}`);
   lines.push(`当前播放：${formatTimestamp(input.at)}`);
 
   if (usedCues.length > 0) {
-    const first = usedCues[0];
-    const last = usedCues[usedCues.length - 1];
-    const start = first ? formatTimestamp(first.from) : formatTimestamp(Math.max(0, input.at - windowSec));
-    const end = last ? formatTimestamp(last.to) : formatTimestamp(input.at + windowSec);
-    lines.push(`附近字幕（${start}–${end}）：`);
+    if (global) {
+      lines.push(`全片字幕（抽稀，${usedCues.length} 段，时间不连续）：`);
+    } else {
+      const first = usedCues[0];
+      const last = usedCues[usedCues.length - 1];
+      const start = first ? formatTimestamp(first.from) : formatTimestamp(Math.max(0, input.at - windowSec));
+      const end = last ? formatTimestamp(last.to) : formatTimestamp(input.at + windowSec);
+      lines.push(`附近字幕（${start}–${end}）：`);
+    }
     for (const cue of usedCues) lines.push(formatCueLine(cue));
+  }
+
+  if (global && input.outline && input.outline.length > 0) {
+    lines.push('');
+    lines.push('课程大纲：');
+    for (const segment of input.outline) {
+      lines.push(`- ${formatTimestamp(segment.start)}–${formatTimestamp(segment.end)} ${segment.title}`);
+    }
   }
 
   const turns = Math.max(0, Math.floor(input.historyTurns ?? 0));
@@ -119,7 +155,8 @@ function buildUserText(input: QaPromptInput, usedCues: SubtitleCue[], windowSec:
     lines.push('最近对话：');
     for (const turn of history) {
       lines.push(`Q：${turn.q}`);
-      lines.push(`A：${turn.a}`);
+      // 每条回答只留前 600 字：追问靠的是指代和结论，不是上一轮的全文。
+      lines.push(`A：${turn.a.length > 600 ? `${turn.a.slice(0, 600)}…` : turn.a}`);
     }
   }
 
@@ -128,56 +165,114 @@ function buildUserText(input: QaPromptInput, usedCues: SubtitleCue[], windowSec:
   return lines.join('\n');
 }
 
+/** 全片字幕先按 15 秒合并成行，减少重复短句。 */
+function mergeCuesForGlobal(cues: SubtitleCue[]): SubtitleCue[] {
+  const merged: SubtitleCue[] = [];
+  let bucket = Number.NaN;
+  for (const cue of cues) {
+    const index = Math.floor(cue.from / 15);
+    const last = merged[merged.length - 1];
+    if (last && index === bucket) {
+      last.to = Math.max(last.to, cue.to);
+      last.content = `${last.content} ${cue.content}`.trim();
+      continue;
+    }
+    merged.push({ ...cue });
+    bucket = index;
+  }
+  return merged;
+}
+
+/** 超预算时按步长抽稀；首尾都保，定位和收尾都要用。 */
+function sampleCues(cues: SubtitleCue[], budgetTokens: number, systemText: string): SubtitleCue[] {
+  if (cues.length === 0) return cues;
+  const cost = (rows: SubtitleCue[]) =>
+    estimateTokens(rows.map(formatCueLine).join('\n')) + estimateTokens(systemText);
+  let step = 1;
+  let picked = cues;
+  while (cost(picked) > budgetTokens && step < cues.length) {
+    step *= 2;
+    picked = [];
+    for (let i = 0; i < cues.length; i += step) picked.push(cues[i]);
+    const tail = cues[cues.length - 1];
+    if (tail && picked[picked.length - 1] !== tail) picked.push(tail);
+  }
+  return picked;
+}
+
 export function buildQaPrompt(input: QaPromptInput): QaPromptResult {
   const cues = (input.cues ?? [])
     .filter(cue => Number.isFinite(cue.from) && Number.isFinite(cue.to) && cue.content.trim() !== '')
     .sort((a, b) => a.from - b.from);
   const budget = Math.max(500, Math.floor(input.maxInputTokens ?? 3000));
   const baseWindow = Math.max(10, Math.floor(input.windowSec ?? 90));
+  const mode = input.mode ?? 'auto';
+  const global =
+    mode === 'global' || (mode === 'auto' && cues.length > 0 && isGlobalQuestion(input.question));
+
   const systemParts = [QA_SYSTEM_PROMPT];
   if (cues.length === 0) systemParts.push(QA_NO_SUBTITLE_NOTE);
   if (input.frame) systemParts.push(QA_FRAME_NOTE);
+  if (global) systemParts.push(QA_GLOBAL_NOTE);
   const systemText = systemParts.join('\n');
 
   let windowSec = baseWindow;
-  let usedCues = pickCues(cues, input.at, windowSec);
-  let text = buildUserText(input, usedCues, windowSec);
+  let usedCues: SubtitleCue[];
+  let text: string;
   let truncated = false;
 
-  // 超预算：先对称缩窗口（90→60→45→30→20），仍超再从头尾砍字幕行。
-  const steps = [60, 45, 30, 20].filter(step => step < baseWindow);
-  for (const step of steps) {
-    if (estimateTokens(text) + estimateTokens(systemText) <= budget) break;
-    windowSec = step;
+  if (global) {
+    usedCues = sampleCues(mergeCuesForGlobal(cues), budget, systemText);
+    text = buildUserText(input, usedCues, baseWindow, true);
+    truncated = usedCues.length < cues.length;
+  } else {
     usedCues = pickCues(cues, input.at, windowSec);
-    text = buildUserText(input, usedCues, windowSec);
-    truncated = true;
-  }
+    text = buildUserText(input, usedCues, windowSec, false);
 
-  const promptTokens = () => estimateTokens(text) + estimateTokens(systemText);
-  while (promptTokens() > budget && usedCues.length > 4) {
-    // 去掉离播放点最远的一条；at 两侧交替削，保留中间上下文。
-    const first = usedCues[0];
-    const last = usedCues[usedCues.length - 1];
-    if (first && (input.at - first.to >= last.from - input.at || usedCues.length <= 6)) {
-      usedCues = usedCues.slice(1);
-    } else {
-      usedCues = usedCues.slice(0, -1);
+    // 超预算：先对称缩窗口（90→60→45→30→20），仍超再从头尾砍字幕行。
+    const steps = [60, 45, 30, 20].filter(step => step < baseWindow);
+    for (const step of steps) {
+      if (estimateTokens(text) + estimateTokens(systemText) <= budget) break;
+      windowSec = step;
+      usedCues = pickCues(cues, input.at, windowSec);
+      text = buildUserText(input, usedCues, windowSec, false);
+      truncated = true;
     }
-    text = buildUserText(input, usedCues, windowSec);
-    truncated = true;
+
+    while (estimateTokens(text) + estimateTokens(systemText) > budget && usedCues.length > 4) {
+      // 去掉离播放点最远的一条；at 两侧交替削，保留中间上下文。
+      const first = usedCues[0];
+      const last = usedCues[usedCues.length - 1];
+      if (first && (input.at - first.to >= last.from - input.at || usedCues.length <= 6)) {
+        usedCues = usedCues.slice(1);
+      } else {
+        usedCues = usedCues.slice(0, -1);
+      }
+      text = buildUserText(input, usedCues, windowSec, false);
+      truncated = true;
+    }
   }
 
+  const promptTokens = estimateTokens(text) + estimateTokens(systemText);
   const firstUsed = usedCues[0];
   const lastUsed = usedCues[usedCues.length - 1];
-  const window: QaPromptWindow = {
-    start: firstUsed ? firstUsed.from : Math.max(0, input.at - windowSec),
-    end: lastUsed ? lastUsed.to : input.at + windowSec,
-    cues: usedCues.length,
-    estimatedInputTokens: promptTokens(),
-    truncated,
-    noSubtitle: cues.length === 0,
-  };
+  const window: QaPromptWindow = global
+    ? {
+        start: 0,
+        end: lastUsed ? lastUsed.to : (input.duration ?? input.at),
+        cues: usedCues.length,
+        estimatedInputTokens: promptTokens,
+        truncated,
+        noSubtitle: cues.length === 0,
+      }
+    : {
+        start: firstUsed ? firstUsed.from : Math.max(0, input.at - windowSec),
+        end: lastUsed ? lastUsed.to : input.at + windowSec,
+        cues: usedCues.length,
+        estimatedInputTokens: promptTokens,
+        truncated,
+        noSubtitle: cues.length === 0,
+      };
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemText }];
   const turns = Math.max(0, Math.floor(input.historyTurns ?? 0));

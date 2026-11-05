@@ -202,3 +202,35 @@ test('无字幕视频：不编造字幕，仍能回答', async () => {
     await bare.close();
   }
 });
+
+test('全局问题：给全片抽稀字幕，而不是附近窗口', async () => {
+  await clearStorage(context, extensionId);
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-test',
+    apiBaseUrl: baseUrl,
+    frameEnabled: false,
+    contextWindowSec: 90,
+  });
+
+  await openPanel(page, VIDEO_URL);
+  const subtitles = await fetchSubtitlesFromOptions(context, extensionId);
+  expect(subtitles.ok, subtitles.error).toBe(true);
+
+  const before = mock.requests.length;
+  await page.locator('.vt-input').fill('整节课一共讲了哪几个主题？');
+  await page.locator('.vt-send').click();
+  await expect(page.locator('.vt-a').last()).not.toBeEmpty({ timeout: 5_000 });
+  await expect(page.locator('.vt-status').last()).toContainText('完成', { timeout: 20_000 });
+
+  expect(mock.requests.length).toBe(before + 1);
+  const body = mock.requests[mock.requests.length - 1]?.body as {
+    messages?: Array<{ role: string; content: string }>;
+  };
+  const messages = body.messages ?? [];
+  const system = messages.find(item => item.role === 'system');
+  const user = messages[messages.length - 1];
+  expect(system?.content).toContain('整体问题');
+  expect(user?.content).toContain('全片字幕（抽稀');
+  expect(user?.content).not.toContain('附近字幕（');
+  expect(user?.content).toContain('整节课一共讲了哪几个主题？');
+});

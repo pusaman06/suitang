@@ -19,6 +19,8 @@ export interface Settings {
   maxTokens: number;
   /** 问答上下文窗口（秒），当前时间前后各取这么多。 */
   contextWindowSec: number;
+  /** 追问时带上的最近几轮问答；0 表示不带。 */
+  historyTurns: number;
   /** 点时间戳跳转后是否自动播放；false 表示保持暂停。 */
   jumpAutoPlay: boolean;
   /** 提问时是否附带当前视频画面截图。 */
@@ -37,6 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thinking: false,
   maxTokens: 2048,
   contextWindowSec: 90,
+  historyTurns: 2,
   jumpAutoPlay: false,
   frameEnabled: true,
   companionUrl: DEFAULT_COMPANION_URL,
@@ -90,6 +93,7 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
     thinking: typeof saved.thinking === 'boolean' ? saved.thinking : DEFAULT_SETTINGS.thinking,
     maxTokens: clampInt(saved.maxTokens, DEFAULT_SETTINGS.maxTokens, 256, 8192),
     contextWindowSec: clampInt(saved.contextWindowSec, DEFAULT_SETTINGS.contextWindowSec, 30, 300),
+    historyTurns: clampInt(saved.historyTurns, DEFAULT_SETTINGS.historyTurns, 0, 5),
     jumpAutoPlay: typeof saved.jumpAutoPlay === 'boolean' ? saved.jumpAutoPlay : DEFAULT_SETTINGS.jumpAutoPlay,
     // D4 新增：旧存档没有这个字段时按默认开启处理。
     frameEnabled: typeof saved.frameEnabled === 'boolean' ? saved.frameEnabled : DEFAULT_SETTINGS.frameEnabled,
