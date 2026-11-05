@@ -621,10 +621,6 @@ async function generateOutline(
 ): Promise<OutlineGenerateResponse> {
   try {
     const settings = await loadSettings();
-    if (!settings.apiKey.trim()) {
-      throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
-    }
-
     let cues: SubtitleCue[] = [];
     let chapters: OutlineSegment[] = [];
     try {
@@ -663,6 +659,10 @@ async function generateOutline(
         outline: chapters,
       }).catch(error => log('outline sync failed', error));
       return { ok: true, outline };
+    }
+
+    if (!settings.apiKey.trim()) {
+      throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
     }
 
     const prompt = buildOutlinePrompt({
