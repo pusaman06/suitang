@@ -111,7 +111,7 @@ test('请求体符合协议，回答含可点击 [mm:ss] 且能跳转', async ()
 
   const messages = body.messages ?? [];
   const system = messages.find(item => item.role === 'system');
-  expect(system?.content).toContain('视频学习助手');
+  expect(system?.content).toContain('一起看课的学霸朋友');
   const user = messages[messages.length - 1];
   expect(user?.role).toBe('user');
   expect(user?.content).toContain('附近字幕（');
