@@ -74,7 +74,7 @@
 │  · 消息路由          │   └───────────┬──────────────┘
 └──────────┬───────────┘               │
            ▼                           ▼
-   api.deepseek.com        %USERPROFILE%\Documents\video-tutor\
+   api.deepseek.com        D:\project\video-tutor\data\
                                            │
                                            ▼
                                   DSH 技能 video-notes
@@ -142,7 +142,7 @@
   - `GET /api/videos` 列表
   - `GET /api/videos/:bvid`
   - `PUT /api/videos/:bvid` 覆盖写入
-- 落盘：`videos/<bvid>.json` + `videos/<bvid>.md`，默认目录 `%USERPROFILE%\Documents\video-tutor\`，可用 `--dir` 改。
+- 落盘：`videos/<bvid>.json` + `videos/<bvid>.md`，默认目录 `D:\project\video-tutor\data\`，可用 `--dir` 改。
 - CORS 只允许 `chrome-extension://*`；不接受局域网访问。
 
 ### 4.3 DSH 技能
