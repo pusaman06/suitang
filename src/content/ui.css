@@ -68,16 +68,7 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
-  cursor: grab;
   user-select: none;
-}
-
-.vt-panel.vt-dragging {
-  user-select: none;
-}
-
-.vt-panel.vt-dragging .vt-head {
-  cursor: grabbing;
 }
 
 .vt-title {

@@ -273,7 +273,7 @@ test('全局问题：给全片抽稀字幕，而不是附近窗口', async () =>
   expect(user?.content).toContain('整节课一共讲了哪几个主题？');
 });
 
-test('面板可拖动、发送后清空输入框、键盘不穿透到页面', async () => {
+test('拖悬浮球带走面板、面板自动换边、发送后清空、键盘不穿透', async () => {
   await clearStorage(context, extensionId);
   await writeSettings(context, extensionId, {
     apiKey: 'sk-e2e-test',
@@ -282,21 +282,40 @@ test('面板可拖动、发送后清空输入框、键盘不穿透到页面', as
   });
   await openPanel(page, VIDEO_URL);
 
-  // 1. 拖动标题栏，面板位置要真的变。
+  const ball = page.locator('.vt-ball');
   const panel = page.locator('.vt-panel');
-  const before = await panel.boundingBox();
-  const head = await page.locator('.vt-head').boundingBox();
-  expect(before && head).toBeTruthy();
-  await page.mouse.move(head!.x + 40, head!.y + 10);
-  await page.mouse.down();
-  await page.mouse.move(head!.x + 40 - 120, head!.y + 10 - 70, { steps: 6 });
-  await page.mouse.up();
-  const after = await panel.boundingBox();
-  expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(50);
-  expect(before!.y - after!.y).toBeGreaterThan(30);
-  await page.screenshot({ path: join(SHOT_DIR, 'd3-panel-dragged.png') });
+  const viewport = page.viewportSize()!;
 
-  // 2. 面板里的按键不应该冒泡到 document（B 站快捷键就在 document 上）。
+  const dragBallTo = async (x: number, y: number) => {
+    const box = await ball.boundingBox();
+    expect(box).toBeTruthy();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, y, { steps: 8 });
+    await page.mouse.up();
+  };
+
+  // 1. 拖到左上角：面板应当落在球右侧，并且完整留在视口里。
+  await dragBallTo(140, 140);
+  const topLeftBall = await ball.boundingBox();
+  const topLeftPanel = await panel.boundingBox();
+  expect(topLeftBall && topLeftPanel).toBeTruthy();
+  expect(topLeftPanel!.x).toBeGreaterThan(topLeftBall!.x + topLeftBall!.width);
+  expect(topLeftPanel!.x).toBeGreaterThanOrEqual(0);
+  expect(topLeftPanel!.y).toBeGreaterThanOrEqual(0);
+  expect(topLeftPanel!.x + topLeftPanel!.width).toBeLessThanOrEqual(viewport.width);
+  expect(topLeftPanel!.y + topLeftPanel!.height).toBeLessThanOrEqual(viewport.height);
+
+  // 2. 拖到右下角：右侧放不下，面板自动换到球左边。
+  await dragBallTo(viewport.width - 80, viewport.height - 80);
+  const bottomRightBall = await ball.boundingBox();
+  const bottomRightPanel = await panel.boundingBox();
+  expect(bottomRightPanel!.x + bottomRightPanel!.width).toBeLessThan(bottomRightBall!.x);
+  expect(bottomRightPanel!.y + bottomRightPanel!.height).toBeLessThanOrEqual(viewport.height);
+
+  await page.screenshot({ path: join(SHOT_DIR, 'd3-ball-dragged.png') });
+
+  // 3. 面板里的按键不应该冒泡到 document（B 站快捷键就在 document 上）。
   await page.evaluate(() => {
     const scope = window as unknown as { __pageKeys?: number };
     scope.__pageKeys = 0;

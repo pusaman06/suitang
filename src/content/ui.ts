@@ -103,7 +103,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
   const send = must<HTMLButtonElement>(shadow, '.vt-send');
-  const head = must<HTMLElement>(shadow, '.vt-head');
 
   let currentInfo = info;
   let settings: Settings | null = null;
@@ -226,6 +225,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const toggle = () => {
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
+      placePanelNearBall();
       input.focus();
       // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
       void loadOutline();
@@ -237,7 +237,10 @@ export function mountUi(info: VideoInfo): UiHandle {
     }
   };
 
-  ball.addEventListener('click', toggle);
+  ball.addEventListener('click', () => {
+    if (suppressBallClick) return;
+    toggle();
+  });
   gear.addEventListener('click', () => {
     // content script 的 chrome.runtime 没有 openOptionsPage，转给 background。
     void chrome.runtime.sendMessage({ type: 'options:open' });
@@ -864,66 +867,86 @@ export function mountUi(info: VideoInfo): UiHandle {
   };
   document.addEventListener('keydown', onKeyDown);
 
-  /* -------- 面板拖动：拖动标题栏，位置记在本地 -------- */
+  /* -------- 悬浮球拖动：球是把手，面板自动贴边 -------- */
 
-  const PANEL_POS_KEY = 'panel:pos';
+  const BALL_POS_KEY = 'ball:pos';
+  const PANEL_GAP = 12;
+  const EDGE = 8;
 
-  const placePanel = (x: number, y: number) => {
+  const clampValue = (value: number, min: number, max: number) =>
+    Math.min(Math.max(value, min), Math.max(min, max));
+
+  const placeBall = (x: number, y: number) => {
+    const size = ball.offsetWidth || 48;
+    ball.style.left = `${clampValue(x, EDGE, window.innerWidth - size - EDGE)}px`;
+    ball.style.top = `${clampValue(y, EDGE, window.innerHeight - size - EDGE)}px`;
+    ball.style.right = 'auto';
+  };
+
+  const placePanelNearBall = () => {
+    if (panel.hidden) return;
     const width = panel.offsetWidth;
     const height = panel.offsetHeight;
-    const maxX = Math.max(8, window.innerWidth - width - 8);
-    const maxY = Math.max(8, window.innerHeight - height - 8);
-    panel.style.left = `${Math.min(Math.max(8, x), maxX)}px`;
-    panel.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
+    const rect = ball.getBoundingClientRect();
+    let left = rect.right + PANEL_GAP;
+    if (left + width > window.innerWidth - EDGE) left = rect.left - width - PANEL_GAP;
+    const top = rect.top + rect.height / 2 - height / 2;
+    panel.style.left = `${clampValue(left, EDGE, window.innerWidth - width - EDGE)}px`;
+    panel.style.top = `${clampValue(top, EDGE, window.innerHeight - height - EDGE)}px`;
     panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
   };
 
-  const savePanelPos = () => {
-    const rect = panel.getBoundingClientRect();
-    void chrome.storage.local.set({
-      [PANEL_POS_KEY]: { x: Math.round(rect.left), y: Math.round(rect.top) },
-    });
-  };
-
-  void chrome.storage.local.get(PANEL_POS_KEY).then(saved => {
-    const pos = (saved as Record<string, unknown> | undefined)?.[PANEL_POS_KEY];
+  void chrome.storage.local.get(BALL_POS_KEY).then(saved => {
+    const pos = (saved as Record<string, unknown> | undefined)?.[BALL_POS_KEY];
     if (!pos || typeof pos !== 'object') return;
     const { x, y } = pos as { x?: unknown; y?: unknown };
-    if (typeof x === 'number' && typeof y === 'number') placePanel(x, y);
+    if (typeof x === 'number' && typeof y === 'number') placeBall(x, y);
   });
 
-  let dragging: { dx: number; dy: number } | null = null;
+  let ballDrag: { dx: number; dy: number; moved: boolean } | null = null;
+  let suppressBallClick = false;
 
-  head.addEventListener('pointerdown', event => {
+  ball.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
-    if ((event.target as HTMLElement | null)?.closest('button')) return;
-    const rect = panel.getBoundingClientRect();
-    dragging = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
-    head.setPointerCapture(event.pointerId);
-    panel.classList.add('vt-dragging');
+    const rect = ball.getBoundingClientRect();
+    ballDrag = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false };
+    ball.setPointerCapture(event.pointerId);
     event.preventDefault();
   });
 
-  head.addEventListener('pointermove', event => {
-    if (!dragging) return;
-    placePanel(event.clientX - dragging.dx, event.clientY - dragging.dy);
+  ball.addEventListener('pointermove', event => {
+    if (!ballDrag) return;
+    const rect = ball.getBoundingClientRect();
+    const x = event.clientX - ballDrag.dx;
+    const y = event.clientY - ballDrag.dy;
+    if (Math.abs(x - rect.left) + Math.abs(y - rect.top) > 3) ballDrag.moved = true;
+    placeBall(x, y);
+    placePanelNearBall();
   });
 
-  const endDrag = (event: PointerEvent) => {
-    if (!dragging) return;
-    dragging = null;
-    if (head.hasPointerCapture(event.pointerId)) head.releasePointerCapture(event.pointerId);
-    panel.classList.remove('vt-dragging');
-    savePanelPos();
+  const endBallDrag = (event: PointerEvent) => {
+    if (!ballDrag) return;
+    const moved = ballDrag.moved;
+    ballDrag = null;
+    if (ball.hasPointerCapture(event.pointerId)) ball.releasePointerCapture(event.pointerId);
+    if (moved) {
+      const rect = ball.getBoundingClientRect();
+      void chrome.storage.local.set({
+        [BALL_POS_KEY]: { x: Math.round(rect.left), y: Math.round(rect.top) },
+      });
+    }
+    suppressBallClick = moved;
+    window.setTimeout(() => {
+      suppressBallClick = false;
+    }, 0);
   };
-  head.addEventListener('pointerup', endDrag);
-  head.addEventListener('pointercancel', endDrag);
+  ball.addEventListener('pointerup', endBallDrag);
+  ball.addEventListener('pointercancel', endBallDrag);
 
   const onResize = () => {
-    if (panel.hidden) return;
-    const rect = panel.getBoundingClientRect();
-    placePanel(rect.left, rect.top);
+    const rect = ball.getBoundingClientRect();
+    placeBall(rect.left, rect.top);
+    placePanelNearBall();
   };
   window.addEventListener('resize', onResize);
 
