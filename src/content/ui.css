@@ -334,6 +334,49 @@
   padding-right: 2px;
 }
 
+/* 细滚动条：默认几乎看不见，悬停才明显，别让一条白条打断深色面板。 */
+.vt-panel,
+.vt-answers,
+.vt-outline-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.vt-panel::-webkit-scrollbar,
+.vt-answers::-webkit-scrollbar,
+.vt-outline-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.vt-panel::-webkit-scrollbar-track,
+.vt-answers::-webkit-scrollbar-track,
+.vt-outline-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vt-panel::-webkit-scrollbar-thumb,
+.vt-answers::-webkit-scrollbar-thumb,
+.vt-outline-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  background-clip: padding-box;
+}
+
+.vt-panel:hover::-webkit-scrollbar-thumb,
+.vt-answers:hover::-webkit-scrollbar-thumb,
+.vt-outline-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.26);
+  background-clip: padding-box;
+}
+
+.vt-panel::-webkit-scrollbar-corner,
+.vt-answers::-webkit-scrollbar-corner,
+.vt-outline-list::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* 历史记录只在有记录时露出来，避免空白面板里多个按钮。 */
 .vt-history-head {
   display: flex;
