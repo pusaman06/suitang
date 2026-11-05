@@ -197,7 +197,9 @@ export function parseOutline(
   segments[0].start = 0;
 
   const lastSegment = segments[segments.length - 1];
-  if (limit - lastSegment.end < 30) lastSegment.end = limit;
+  // 大纲必须覆盖到片尾。模型常在最后几分钟就收尾（真实用例里差过 290 秒），
+  // 旧条件写成「缺口小于 30 秒才补」，等于缺口越大越不补，正好写反了。
+  if (limit > 0 && lastSegment.end < limit) lastSegment.end = limit;
 
   if (segments.length < range.min) return null;
   // 模型经常按字幕粒度切得太碎（比如 42 分钟切 27 段）。硬拒不如合并：
