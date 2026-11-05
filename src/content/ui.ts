@@ -94,7 +94,19 @@ export function mountUi(info: VideoInfo): UiHandle {
       <div class="vt-composer">
         <textarea class="vt-input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="vt-actions">
+          <button class="vt-kb-open" type="button" title="把这期视频的资料存进个人知识库">存到知识库</button>
           <button class="vt-send">发送</button>
+        </div>
+      </div>
+      <div class="vt-kb" hidden>
+        <div class="vt-kb-head">
+          <span class="vt-kb-title">存到知识库</span>
+          <span class="vt-kb-hint"></span>
+        </div>
+        <textarea class="vt-kb-preview" rows="12" spellcheck="false"></textarea>
+        <div class="vt-kb-foot">
+          <button class="vt-kb-confirm" type="button">写入知识库</button>
+          <button class="vt-kb-cancel" type="button">取消</button>
         </div>
       </div>
     </section>`;
@@ -129,6 +141,12 @@ export function mountUi(info: VideoInfo): UiHandle {
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
   const send = must<HTMLButtonElement>(shadow, '.vt-send');
+  const kbOpen = must<HTMLButtonElement>(shadow, '.vt-kb-open');
+  const kbBox = must<HTMLElement>(shadow, '.vt-kb');
+  const kbPreview = must<HTMLTextAreaElement>(shadow, '.vt-kb-preview');
+  const kbHint = must<HTMLElement>(shadow, '.vt-kb-hint');
+  const kbConfirm = must<HTMLButtonElement>(shadow, '.vt-kb-confirm');
+  const kbCancel = must<HTMLButtonElement>(shadow, '.vt-kb-cancel');
 
   let currentInfo = info;
   let settings: Settings | null = null;
@@ -238,6 +256,97 @@ export function mountUi(info: VideoInfo): UiHandle {
       })
       .catch(() => {
         status.textContent = '清空失败，稍后再试';
+      });
+  });
+
+  /** 「存到知识库」：先拉问答记录 → 让 background 拼草稿 → 面板里可改 → 确认才写盘。 */
+  let kbBusy = false;
+  let kbFileName = '';
+
+  const draftKb = async (): Promise<void> => {
+    if (kbBusy) return;
+    kbBusy = true;
+    kbOpen.disabled = true;
+    kbOpen.textContent = '生成中…';
+    try {
+      const history = (await chrome.runtime.sendMessage({
+        type: 'qa:history',
+        bvid: currentInfo.bvid,
+        p: currentInfo.p,
+      })) as { ok?: boolean; records?: QaRecord[] } | undefined;
+      const qa = (history?.records ?? []).map(record => ({
+        question: record.question,
+        answer: record.answer,
+      }));
+      const response = (await chrome.runtime.sendMessage({
+        type: 'kb:draft',
+        info: currentInfo,
+        segments: outline?.segments ?? [],
+        qa,
+      })) as
+        | { ok?: boolean; fileName?: string; markdown?: string; usedModel?: boolean; message?: string }
+        | undefined;
+      if (!response?.ok) {
+        status.textContent = response?.message ?? '生成笔记草稿失败';
+        return;
+      }
+      kbFileName = response.fileName ?? '';
+      kbPreview.value = response.markdown ?? '';
+      kbHint.textContent = response.usedModel
+        ? `${kbFileName} · 摘要由模型生成，可直接改`
+        : `${kbFileName} · 没配 API Key，只有资料没有摘要`;
+      kbBox.hidden = false;
+      kbBox.scrollIntoView({ block: 'nearest' });
+      kbPreview.focus();
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : '生成笔记草稿失败';
+    } finally {
+      kbBusy = false;
+      kbOpen.disabled = false;
+      kbOpen.textContent = '存到知识库';
+    }
+  };
+
+  kbOpen.addEventListener('click', () => {
+    void draftKb();
+  });
+
+  kbCancel.addEventListener('click', () => {
+    kbBox.hidden = true;
+    kbPreview.value = '';
+    kbFileName = '';
+  });
+
+  kbConfirm.addEventListener('click', () => {
+    if (kbBusy) return;
+    if (kbPreview.value.trim() === '') {
+      kbHint.textContent = '内容为空，没什么可存的';
+      return;
+    }
+    kbBusy = true;
+    kbConfirm.disabled = true;
+    kbConfirm.textContent = '写入中…';
+    void chrome.runtime
+      .sendMessage({ type: 'kb:save', fileName: kbFileName, markdown: kbPreview.value })
+      .then(response => {
+        const result = response as
+          | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
+          | undefined;
+        if (!result?.ok) {
+          kbHint.textContent = result?.message ?? '写入失败';
+          return;
+        }
+        kbBox.hidden = true;
+        kbPreview.value = '';
+        status.textContent = `${result.overwrote ? '已覆盖' : '已存入'} ${result.relative}（约 8 秒后可搜到）`;
+      })
+      .catch(error => {
+        kbHint.textContent = error instanceof Error ? error.message : '写入失败';
+      })
+      .finally(() => {
+        kbBusy = false;
+        kbConfirm.disabled = false;
+        kbConfirm.textContent = '写入知识库';
       });
   });
 

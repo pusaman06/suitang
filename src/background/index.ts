@@ -3,6 +3,7 @@ import type {
   SubtitleCue,
   SubtitleResult,
   SubtitleTrack,
+  VideoInfo,
   VideoMeta,
 } from '../shared/types';
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
@@ -21,6 +22,13 @@ import {
   type OutlineGetResponse,
   type OutlineSegment,
 } from '../shared/outline';
+import {
+  buildKbMarkdown,
+  buildKbSummaryPrompt,
+  kbFileName,
+  parseKbSummary,
+  type KbQaPair,
+} from '../shared/kb';
 import { extractCitationSeconds } from '../shared/citations';
 import {
   buildCoursePayload,
@@ -794,6 +802,55 @@ function readOutlineFrames(value: unknown): QaFrame[] {
   return value.filter(isQaFrame).slice(0, 10);
 }
 
+function readKbInfo(value: unknown): VideoInfo | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const bvid = typeof raw.bvid === 'string' ? raw.bvid.trim() : '';
+  const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+  const p = typeof raw.p === 'number' && raw.p >= 1 ? Math.floor(raw.p) : 0;
+  if (bvid === '' || title === '' || p === 0) return null;
+  return {
+    bvid,
+    title,
+    p,
+    aid: typeof raw.aid === 'number' ? raw.aid : undefined,
+    cid: typeof raw.cid === 'number' ? raw.cid : undefined,
+    partTitle: typeof raw.partTitle === 'string' ? raw.partTitle : undefined,
+    owner: typeof raw.owner === 'string' ? raw.owner : undefined,
+    duration: typeof raw.duration === 'number' && raw.duration > 0 ? raw.duration : undefined,
+    pageCount: typeof raw.pageCount === 'number' ? raw.pageCount : undefined,
+  };
+}
+
+function readKbSegments(value: unknown): OutlineSegment[] {
+  if (!Array.isArray(value)) return [];
+  const out: OutlineSegment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const start = typeof raw.start === 'number' ? raw.start : Number.NaN;
+    const end = typeof raw.end === 'number' ? raw.end : Number.NaN;
+    const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+    if (!Number.isFinite(start) || !Number.isFinite(end) || title === '') continue;
+    out.push({ start, end, title });
+  }
+  return out;
+}
+
+function readKbQa(value: unknown): KbQaPair[] {
+  if (!Array.isArray(value)) return [];
+  const out: KbQaPair[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const question = typeof raw.question === 'string' ? raw.question.trim() : '';
+    const answer = typeof raw.answer === 'string' ? raw.answer.trim() : '';
+    if (question === '' || answer === '') continue;
+    out.push({ question, answer });
+  }
+  return out;
+}
+
 function readCaptureRect(value: unknown): QaRect | null {
   if (!value || typeof value !== 'object') return null;
   const rect = value as Partial<QaRect>;
@@ -1458,6 +1515,96 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message: error instanceof Error ? error.message : '清空问答记录失败',
         }),
       );
+    return true;
+  }
+
+  // 「存到知识库」第一步：让模型补「一句话摘要 + 关键词」，其余用现成的。
+  if (message?.type === 'kb:draft') {
+    const info = readKbInfo(message.info);
+    if (!info) {
+      sendResponse({ ok: false, message: '缺少视频信息' });
+      return false;
+    }
+    const segments = readKbSegments(message.segments);
+    const qa = readKbQa(message.qa);
+    void (async () => {
+      const settings = await loadSettings();
+      let summary = '';
+      let keywords: string[] = [];
+      let usedModel = false;
+      if (settings.apiKey.trim() !== '') {
+        try {
+          const result = await callDeepSeek({
+            apiKey: settings.apiKey,
+            baseUrl: settings.apiBaseUrl,
+            model: settings.textModel,
+            messages: buildKbSummaryPrompt({ info, segments }),
+            thinking: false,
+            maxTokens: 512,
+            temperature: 0.2,
+            onChunk: () => {},
+          });
+          const parsed = parseKbSummary(result.text);
+          if (parsed) {
+            summary = parsed.summary;
+            keywords = parsed.keywords;
+            usedModel = true;
+          }
+        } catch (error) {
+          // 摘要生成失败不该挡住入库：退化成「没有摘要」的纯资料条目。
+          log('kb summary failed', error);
+        }
+      }
+      const now = new Date();
+      sendResponse({
+        ok: true,
+        fileName: kbFileName({ title: info.title, bvid: info.bvid, now }),
+        markdown: buildKbMarkdown({ info, segments, qa, summary, keywords, now }),
+        usedModel,
+      });
+    })().catch(error =>
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : '生成笔记草稿失败',
+      }),
+    );
+    return true;
+  }
+
+  // 「存到知识库」第二步：交给本地 companion 写进 <kb>/20-知识笔记/。
+  if (message?.type === 'kb:save') {
+    const fileName = typeof message.fileName === 'string' ? message.fileName.trim() : '';
+    const markdown = typeof message.markdown === 'string' ? message.markdown : '';
+    if (fileName === '' || markdown.trim() === '') {
+      sendResponse({ ok: false, message: '没有可保存的内容' });
+      return false;
+    }
+    void (async () => {
+      const settings = await loadSettings();
+      const base = settings.companionUrl.replace(/\/+$/, '');
+      const response = await fetch(`${base}/api/kb/note`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ fileName, markdown }),
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
+        | null;
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message ?? `companion 返回 HTTP ${response.status}`);
+      }
+      sendResponse({ ok: true, relative: data.relative ?? fileName, overwrote: data.overwrote === true });
+    })().catch(error =>
+      sendResponse({
+        ok: false,
+        message:
+          error instanceof Error && error.message.includes('Failed to fetch')
+            ? '连不上 companion（127.0.0.1:8787），先在终端跑 pnpm companion'
+            : error instanceof Error
+              ? error.message
+              : '写入知识库失败',
+      }),
+    );
     return true;
   }
 

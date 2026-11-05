@@ -613,7 +613,9 @@
 
 .vt-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .vt-send {
@@ -634,6 +636,112 @@
 .vt-send:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+.vt-kb-open {
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: transparent;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+.vt-kb-open:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+  color: #fff;
+}
+
+.vt-kb-open:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.vt-kb {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.vt-kb-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.vt-kb-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.vt-kb-hint {
+  font-size: 11px;
+  color: #8b93a7;
+  text-align: right;
+  word-break: break-all;
+}
+
+.vt-kb-preview {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  color: #dfe4ee;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
+.vt-kb-preview:focus {
+  outline: none;
+  border-color: #4f7cff;
+}
+
+.vt-kb-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.vt-kb-confirm {
+  padding: 5px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #4f7cff;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vt-kb-confirm:hover {
+  background: #5d88ff;
+}
+
+.vt-kb-confirm:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.vt-kb-cancel {
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: transparent;
+  color: #aab2c4;
+  font: inherit;
+  cursor: pointer;
+}
+
+.vt-kb-cancel:hover {
+  color: #fff;
 }
 
 .vt-error {

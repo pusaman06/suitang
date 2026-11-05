@@ -16,12 +16,18 @@ import { fileURLToPath } from 'node:url';
 const VERSION = '0.1.0';
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const DEFAULT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
+/** 个人知识库根目录；笔记统一落 <kb>/20-知识笔记/。 */
+const DEFAULT_KB_DIR = path.resolve('D:/knowledge-base');
+const KB_NOTE_SUBDIR = '20-知识笔记';
+/** 文件名白名单：中文、字母数字、空格和几个常见标点，杜绝路径穿越。 */
+const KB_FILE_RE = /^[\p{Script=Han}A-Za-z0-9 _\-（）()〔〕【】\[\]·、，,.]+\.md$/u;
 const BVID_RE = /^BV[0-9A-Za-z]{10}$/;
 const startedAt = Date.now();
 
 function parseArgs(argv) {
   let port = 8787;
   let dir = DEFAULT_DIR;
+  let kbDir = DEFAULT_KB_DIR;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--port') {
@@ -34,8 +40,13 @@ function parseArgs(argv) {
       i += 1;
       if (!raw) throw new Error('--dir 需要目录路径');
       dir = path.resolve(raw);
+    } else if (arg === '--kb') {
+      const raw = argv[i + 1];
+      i += 1;
+      if (!raw) throw new Error('--kb 需要知识库根目录路径');
+      kbDir = path.resolve(raw);
     } else if (arg === '--help' || arg === '-h') {
-      console.log('usage: node companion/server.mjs [--port 8787] [--dir <dir>]');
+      console.log('usage: node companion/server.mjs [--port 8787] [--dir <dir>] [--kb <知识库根目录>]');
       process.exit(0);
     } else {
       throw new Error(`未知参数：${arg}`);
@@ -44,7 +55,7 @@ function parseArgs(argv) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('--port 需要 0–65535 的整数');
   }
-  return { port, dir };
+  return { port, dir, kbDir };
 }
 
 function nowIso() {
@@ -328,7 +339,7 @@ async function listVideos(videosRoot) {
   return videos;
 }
 
-async function handle(req, res, videosRoot, origin) {
+async function handle(req, res, videosRoot, kbDir, origin) {
   const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
 
   if (req.method === 'OPTIONS') {
@@ -353,6 +364,61 @@ async function handle(req, res, videosRoot, origin) {
 
   if (req.method === 'GET' && pathname === '/api/videos') {
     sendJson(res, 200, { ok: true, videos: await listVideos(videosRoot) }, origin);
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/kb/status') {
+    const noteDir = path.join(kbDir, KB_NOTE_SUBDIR);
+    let ready = false;
+    try {
+      await fs.access(noteDir);
+      ready = true;
+    } catch {
+      ready = false;
+    }
+    sendJson(res, 200, { ok: true, kbDir, noteDir, ready }, origin);
+    return;
+  }
+
+  // 扩展「存到知识库」的落点：只往 <kb>/20-知识笔记/ 写一个 .md。
+  if (req.method === 'POST' && pathname === '/api/kb/note') {
+    const body = await readJsonBody(req);
+    const fileName = typeof body?.fileName === 'string' ? body.fileName.trim() : '';
+    const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
+    if (fileName === '' || !KB_FILE_RE.test(fileName) || fileName.includes('..')) {
+      sendError(res, 400, 'bad-request', 'fileName 不合法（只接受纯文件名）', origin);
+      return;
+    }
+    if (markdown.trim() === '') {
+      sendError(res, 400, 'bad-request', 'markdown 不能为空', origin);
+      return;
+    }
+    if (!kbDir) {
+      sendError(res, 500, 'write-failed', '没有配置知识库目录（--kb）', origin);
+      return;
+    }
+    const noteDir = path.join(kbDir, KB_NOTE_SUBDIR);
+    const file = path.join(noteDir, fileName);
+    let overwrote = false;
+    try {
+      await fs.access(file);
+      overwrote = true;
+    } catch {
+      overwrote = false;
+    }
+    await writeAtomic(file, `${markdown.trimEnd()}\n`);
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        file,
+        relative: `${KB_NOTE_SUBDIR}/${fileName}`,
+        bytes: Buffer.byteLength(markdown, 'utf8'),
+        overwrote,
+      },
+      origin,
+    );
     return;
   }
 
@@ -475,7 +541,7 @@ async function handle(req, res, videosRoot, origin) {
 }
 
 async function main() {
-  const { port, dir } = parseArgs(process.argv.slice(2));
+  const { port, dir, kbDir } = parseArgs(process.argv.slice(2));
   const videosRoot = path.join(dir, 'videos');
 
   const server = http.createServer((req, res) => {
@@ -488,7 +554,7 @@ async function main() {
       return;
     }
 
-    void handle(req, res, videosRoot, origin)
+    void handle(req, res, videosRoot, kbDir, origin)
       .catch(error => {
         const rawCode =
           error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
@@ -517,6 +583,7 @@ async function main() {
     const actualPort = typeof address === 'object' && address ? address.port : port;
     console.log(`listening on 127.0.0.1:${actualPort}`);
     console.log(`data dir: ${dir}`);
+    console.log(`kb dir: ${kbDir}`);
   });
 
   const shutdown = () => {

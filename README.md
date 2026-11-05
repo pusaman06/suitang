@@ -29,6 +29,26 @@ Copy-Item .env.example .env
 `playwright.config.ts` 会自动加载 `.env`（`process.loadEnvFile`），没填 key 的用例会自动 skip 而不是报错。
 `.env` 已在 `.gitignore` 里，不会进仓库。
 
+## 存到个人知识库
+
+面板右下角有「**存到知识库**」按钮：点一下会拿这期视频的标题、大纲、问答拼成一条 Markdown 笔记，先显示在面板里让你改，点「写入知识库」才真正落盘。
+
+落盘位置是 `<知识库根目录>/20-知识笔记/<日期>-<标题>（<BV号>）.md`，默认根目录 `D:\knowledge-base`（`D:\knowledge-base\_模板\视频笔记.md` 是格式说明）。写进去之后，知识库插件的 watcher 大约 8 秒会把它索引进库，之后就能用 `kb_search` 搜到。
+
+**这一步需要本地 companion 在跑**（浏览器扩展不能直接写任意磁盘路径）：
+
+```powershell
+pnpm companion
+```
+
+看到 `kb dir:` 那行就说明起来了，窗口留着别关。companion 默认监听 `127.0.0.1:8787`，也可以在设置页改地址。知识库在别的盘就加参数：
+
+```powershell
+node companion/server.mjs --kb "E:\my-kb"
+```
+
+没开 companion 就点保存，面板会直接告诉你「连不上 companion」，不会静默失败。
+
 ## 在 Edge 里加载
 
 1. 打开 `edge://extensions/`
