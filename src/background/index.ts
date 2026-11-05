@@ -41,6 +41,7 @@ import {
 } from '../shared/qa';
 import { callDeepSeek, QaAbortError, QaError } from './deepseek';
 import { captureFrame } from './frame';
+import { appendQaRecord, clearQaStore, readQaStore } from '../shared/qa-store';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
 
@@ -341,10 +342,9 @@ interface ActiveQa {
 const activeByTab = new Map<number, ActiveQa>();
 
 /**
- * 最近几轮问答，供「那你…」这类追问使用。只在内存里，service worker
- * 重启会丢；切片 2 的 qaStore 落地后换成读存储。
+ * 追问用的最近几轮问答现在存在 qaStore（`qa:<bvid>:<p>`）里，
+ * service worker 重启、页面刷新都不会丢。
  */
-const qaHistory = new Map<string, Array<{ q: string; a: string }>>();
 
 function postToPort(port: chrome.runtime.Port, message: QaServerMessage): void {
   try {
@@ -707,8 +707,16 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
     // 「整节课讲了什么」这类问题只给 ±90 秒答不了：改成全片抽稀字幕 + 已生成大纲。
     const globalQuestion = isGlobalQuestion(payload.question);
     const outline = globalQuestion ? await outlineForQuestion(payload) : undefined;
-    const historyKey = `${payload.bvid}:${payload.p}`;
-    const history = qaHistory.get(historyKey) ?? [];
+    const wantedTurns = Math.max(0, Math.min(5, Math.floor(settings.historyTurns)));
+    // 刷新页面 / SW 重启后仍能接上「那你…」：历史从 qaStore 读，不再用内存 Map。
+    const storedQa = await readQaStore(payload.bvid, payload.p);
+    const history =
+      wantedTurns === 0
+        ? []
+        : storedQa.records.slice(-wantedTurns).map(record => ({
+            q: record.question,
+            a: record.answer,
+          }));
 
     const prompt = buildQaPrompt({
       title: payload.title,
@@ -771,13 +779,16 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       return;
     }
 
-    // 只有成功的回答才进历史；失败的半截别污染下一轮追问的指代。
-    const turns = qaHistory.get(historyKey) ?? [];
-    turns.push({ q: payload.question, a: text });
-    const keep = Math.max(0, Math.min(5, Math.floor(settings.historyTurns)));
-    while (turns.length > keep) turns.shift();
-    if (keep === 0) qaHistory.delete(historyKey);
-    else qaHistory.set(historyKey, turns);
+    // 只有成功的回答才落库；失败或中断的半截不写，免得污染下一轮追问的指代。
+    const citations = extractCitationSeconds(text, payload.duration);
+    const record = await appendQaRecord(payload.bvid, payload.p, {
+      at: payload.at,
+      question: payload.question,
+      answer: text,
+      citations,
+      model,
+      usage,
+    });
 
     postToPort(port, {
       v: 1,
@@ -785,12 +796,11 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       requestId,
       text,
       reasoning,
-      citations: extractCitationSeconds(text, payload.duration),
+      citations,
       usage,
       finishReason: result.finishReason,
       elapsedMs: Date.now() - startedAt,
-      // 切片 1 不落库；等 qaStore 落地后这里换成记录 id。
-      recordId: '',
+      recordId: record.id,
     });
 
     // D6：问答完成即入队，失败只写 lastError，不影响回答。
@@ -931,6 +941,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(result => sendResponse(result))
       .catch(error =>
         sendResponse({ ok: false, error: String(error) } satisfies SubtitleResult),
+      );
+    return true;
+  }
+
+  if (message?.type === 'qa:history') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p = typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    if (!bvid || !p) {
+      sendResponse({ ok: false, records: [], message: '缺少 bvid/p' });
+      return false;
+    }
+    void readQaStore(bvid, p)
+      .then(store => sendResponse({ ok: true, records: store.records }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          records: [],
+          message: error instanceof Error ? error.message : '读取问答记录失败',
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'qa:clear') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p = typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    if (!bvid || !p) {
+      sendResponse({ ok: false, message: '缺少 bvid/p' });
+      return false;
+    }
+    void clearQaStore(bvid, p)
+      .then(() => sendResponse({ ok: true }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '清空问答记录失败',
+        }),
       );
     return true;
   }

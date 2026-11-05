@@ -312,6 +312,34 @@
   padding-right: 2px;
 }
 
+/* 历史记录只在有记录时露出来，避免空白面板里多个按钮。 */
+.vt-history-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -2px;
+}
+
+/* display:flex 会盖掉 UA 的 [hidden]{display:none}，这里补回来。 */
+.vt-history-head[hidden] {
+  display: none;
+}
+
+.vt-clear {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: #8b93a7;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vt-clear:hover {
+  color: #cdd6f4;
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .vt-answers:empty {
   display: none;
 }

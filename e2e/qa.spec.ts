@@ -133,6 +133,27 @@ test('请求体符合协议，回答含可点击 [mm:ss] 且能跳转', async ()
   await page.screenshot({ path: join(SHOT_DIR, 'd3-qa.png'), fullPage: false });
 });
 
+test('刷新后历史还在，清空后消失', async () => {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+  await page.locator('.vt-ball').click();
+  await expect(page.locator('.vt-panel')).toBeVisible();
+
+  const history = page.locator('.vt-turn-history');
+  await expect(history).toHaveCount(1, { timeout: 5_000 });
+  await expect(history.first()).toContainText('这段在讲什么？');
+  await expect(history.first().locator('a.vt-cite')).toHaveCount(1);
+  await expect(page.locator('.vt-clear')).toBeVisible();
+  await page.screenshot({ path: join(SHOT_DIR, 'd3-history.png'), fullPage: false });
+
+  // 第一次点变成确认态，第二次才真的清。
+  await page.locator('.vt-clear').click();
+  await expect(page.locator('.vt-clear')).toHaveText('再点一次确认');
+  await page.locator('.vt-clear').click();
+  await expect(page.locator('.vt-turn-history')).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator('.vt-clear')).toBeHidden();
+});
+
 test('没有 API Key 时不发请求，面板给出提示', async () => {
   await writeSettings(context, extensionId, { apiKey: '', apiBaseUrl: baseUrl });
   const before = mock.requests.length;

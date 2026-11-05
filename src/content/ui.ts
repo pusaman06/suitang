@@ -6,6 +6,7 @@ import {
   type OutlineGetResponse,
 } from '../shared/outline';
 import { QA_PORT_NAME, type QaAskPayload, type QaRect, type QaServerMessage, type QaViewport, type QaWindowInfo } from '../shared/qa';
+import type { QaRecord } from '../shared/qa-store';
 import { loadSettings, type Settings } from '../shared/settings';
 import type { SyncStatus } from '../shared/sync';
 import type { VideoInfo } from '../shared/types';
@@ -61,6 +62,9 @@ export function mountUi(info: VideoInfo): UiHandle {
       </section>
       <div class="vt-status">就绪</div>
       <button class="vt-sync" type="button" title="点击手动重试同步">同步检查中…</button>
+      <div class="vt-history-head" hidden>
+        <button class="vt-clear" type="button">清空记录</button>
+      </div>
       <div class="vt-answers"></div>
       <div class="vt-frame-hint" hidden></div>
       <div class="vt-composer">
@@ -90,6 +94,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   const status = must<HTMLElement>(shadow, '.vt-status');
   const syncLine = must<HTMLButtonElement>(shadow, '.vt-sync');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
+  const historyHead = must<HTMLElement>(shadow, '.vt-history-head');
+  const clearHistory = must<HTMLButtonElement>(shadow, '.vt-clear');
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
   const send = must<HTMLButtonElement>(shadow, '.vt-send');
@@ -123,6 +129,79 @@ export function mountUi(info: VideoInfo): UiHandle {
     if (activeRequestId === '') status.textContent = next.apiKey ? '就绪' : '未配置 API Key';
   });
 
+  /* -------- D3 切片 2：问答记录持久化 -------- */
+
+  const formatRecordTime = (createdAt: number): string => {
+    if (!createdAt) return '历史';
+    const date = new Date(createdAt);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const renderHistoryTurn = (record: QaRecord) => {
+    const turn = document.createElement('div');
+    turn.className = 'vt-turn vt-turn-history';
+    const q = document.createElement('div');
+    q.className = 'vt-q';
+    q.textContent = record.question;
+    const a = document.createElement('div');
+    a.className = 'vt-a';
+    a.innerHTML = renderAnswerHtml(record.answer, currentInfo.duration);
+    const meta = document.createElement('div');
+    meta.className = 'vt-turn-meta';
+    meta.textContent = `${formatRecordTime(record.createdAt)} · ${record.usage.totalTokens} tokens`;
+    turn.append(q, a, meta);
+    answers.append(turn);
+  };
+
+  const syncHistoryHead = () => {
+    historyHead.hidden = answers.querySelector('.vt-turn-history') === null;
+  };
+
+  /** 打开面板 / 切 P 时拉一次记录。读失败就当没有，不影响提问。 */
+  const loadQaHistory = async (): Promise<void> => {
+    if (currentInfo.bvid === '' || currentInfo.p <= 0) return;
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'qa:history',
+        bvid: currentInfo.bvid,
+        p: currentInfo.p,
+      })) as { ok?: boolean; records?: QaRecord[] } | undefined;
+      answers.querySelectorAll('.vt-turn-history').forEach(node => node.remove());
+      if (response?.ok) {
+        for (const record of response.records ?? []) renderHistoryTurn(record);
+      }
+      syncHistoryHead();
+    } catch {
+      // 读历史失败不影响提问。
+    }
+  };
+
+  let clearTimer = 0;
+  clearHistory.addEventListener('click', () => {
+    if (clearTimer === 0) {
+      clearTimer = window.setTimeout(() => {
+        clearTimer = 0;
+        clearHistory.textContent = '清空记录';
+      }, 3000);
+      clearHistory.textContent = '再点一次确认';
+      return;
+    }
+    window.clearTimeout(clearTimer);
+    clearTimer = 0;
+    clearHistory.textContent = '清空记录';
+    void chrome.runtime
+      .sendMessage({ type: 'qa:clear', bvid: currentInfo.bvid, p: currentInfo.p })
+      .then(() => {
+        answers.querySelectorAll('.vt-turn-history').forEach(node => node.remove());
+        syncHistoryHead();
+        status.textContent = '已清空记录';
+      })
+      .catch(() => {
+        status.textContent = '清空失败，稍后再试';
+      });
+  });
+
   const render = (next: VideoInfo) => {
     const nextKey = outlineInfoKey(next);
     const changed = nextKey !== outlineKey;
@@ -132,7 +211,10 @@ export function mountUi(info: VideoInfo): UiHandle {
     const pageLabel = next.pageCount ? `P${next.p} / ${next.pageCount}` : `P${next.p}`;
     part.textContent = `${pageLabel}${next.partTitle ? ` · ${next.partTitle}` : ''}`;
     ids.textContent = `${next.bvid}${next.cid ? ` · cid ${next.cid}` : ''}`;
-    if (changed) resetOutline();
+    if (changed) {
+      resetOutline();
+      void loadQaHistory();
+    }
   };
   render(info);
 
@@ -142,6 +224,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       input.focus();
       // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
       void loadOutline();
+      void loadQaHistory();
       void refreshSync();
       startSyncPolling();
     } else {
@@ -625,6 +708,8 @@ export function mountUi(info: VideoInfo): UiHandle {
         const scope = lastWindow?.noSubtitle ? ' · 无字幕 · 只能按标题回答' : '';
         status.textContent = `完成 · ${message.usage.totalTokens} tokens${scope}`;
         setBusy(false);
+        // 这一轮已经落库，下次打开面板能看到「清空记录」。
+        historyHead.hidden = false;
         // 入队/flush 是后台异步的，稍等再看状态。
         window.setTimeout(() => void refreshSync(), 600);
         return;
