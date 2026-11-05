@@ -21,7 +21,12 @@ export async function launchWithExtension(): Promise<BrowserContext> {
   mkdirSync(SHOT_DIR, { recursive: true });
   // 未打包扩展会被 Chromium 缓存脚本；不清掉会跑到上一版 background.js。
   for (const dir of ['Service Worker', 'Code Cache']) {
-    rmSync(resolve(PROFILE_DIR, 'Default', dir), { recursive: true, force: true });
+    rmSync(resolve(PROFILE_DIR, 'Default', dir), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
   }
   return chromium.launchPersistentContext(PROFILE_DIR, {
     channel: 'chromium',

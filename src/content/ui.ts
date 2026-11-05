@@ -1,4 +1,5 @@
 import styleText from './ui.css?inline';
+import type { AsrError, AsrProgress, AsrResult } from '../shared/asr';
 import { formatTimestamp, renderAnswerHtml } from '../shared/citations';
 import {
   outlineFrameTimes,
@@ -64,6 +65,8 @@ export function mountUi(info: VideoInfo): UiHandle {
             <div class="vt-outline-actions">
               <button class="vt-outline-generate" type="button">生成大纲</button>
               <span class="vt-outline-cost">约 5–10 秒</span>
+              <button class="vt-outline-asr" type="button">转写这段</button>
+              <span class="vt-outline-asr-hint"></span>
             </div>
           </div>
           <ol class="vt-outline-list" hidden></ol>
@@ -101,6 +104,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineEmpty = must<HTMLElement>(shadow, '.vt-outline-empty');
   const outlineEmptyText = must<HTMLElement>(shadow, '.vt-outline-empty-text');
   const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
+  const outlineAsr = must<HTMLButtonElement>(shadow, '.vt-outline-asr');
+  const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
   const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
@@ -140,10 +145,16 @@ export function mountUi(info: VideoInfo): UiHandle {
   let outlineActiveIndex = -1;
   let outlineRetryAction: (() => void) | null = null;
   let lastOutlineTimeupdate = 0;
+  let asrTranscribing = false;
+  let asrDone = false;
+  let asrRunToken = 0;
+  let asrSegments = 0;
+  let asrKey = outlineInfoKey(info);
 
   void loadSettings().then(next => {
     settings = next;
     if (activeRequestId === '') status.textContent = next.apiKey ? '就绪' : '未配置 API Key';
+    updateAsrButton();
   });
 
   /* -------- D3 切片 2：问答记录持久化 -------- */
@@ -396,19 +407,24 @@ export function mountUi(info: VideoInfo): UiHandle {
       } else {
         outlineState.textContent = '生成中…';
       }
+    } else if (asrTranscribing) {
+      outlineState.textContent = '转写中…';
     } else if (!outlineError.hidden) {
       outlineState.textContent = '失败';
     } else if (outline) {
       outlineState.textContent = `${outline.segments.length} 段`;
+    } else if (asrDone) {
+      outlineState.textContent = '已转写';
     } else {
       outlineState.textContent = '未生成';
     }
-    outlineGenerate.disabled = outlineGenerating;
+    outlineGenerate.disabled = outlineGenerating || asrTranscribing;
     outlineGenerate.textContent = outlineGenerating
       ? outlineCapturing
         ? `抓画面 ${outlineCaptureDone}/${outlineCaptureTotal}`
         : '生成中…'
       : '生成大纲';
+    updateAsrButton();
   }
 
   function setOutlineActive(index: number): void {
@@ -508,6 +524,11 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineCaptureDone = 0;
     outlineCaptureTotal = 0;
     outlineActiveIndex = -1;
+    asrRunToken += 1;
+    asrTranscribing = false;
+    asrDone = false;
+    asrSegments = 0;
+    asrKey = outlineInfoKey(currentInfo);
     outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
     outlineList.replaceChildren();
     outlineList.hidden = true;
@@ -767,6 +788,153 @@ export function mountUi(info: VideoInfo): UiHandle {
     seekVideo(segment.start, { autoPlay: settings?.jumpAutoPlay === true });
     setOutlineActive(index);
   }
+
+  /* -------- D8 语音转写 -------- */
+
+  function updateAsrButton(): void {
+    const minutes = Math.max(1, Math.ceil((currentInfo.duration ?? 0) / 60));
+    const configured = Boolean(settings?.asrApiKey.trim());
+    if (asrDone) {
+      outlineAsr.textContent = '已转写';
+      outlineAsr.disabled = true;
+      outlineAsr.title = `已缓存 ${asrSegments} 句转写字幕`;
+      outlineAsrHint.textContent = `已缓存 ${asrSegments} 句`;
+      return;
+    }
+    outlineAsr.textContent = `转写这段（约 ${minutes} 分钟）`;
+    outlineAsr.disabled = asrTranscribing || outlineGenerating || !configured;
+    if (!configured) {
+      outlineAsr.title = '先在设置页填写语音转写 Key';
+      outlineAsrHint.textContent = '先在设置页填写语音转写 Key';
+    } else if (asrTranscribing) {
+      outlineAsr.title = '';
+      outlineAsrHint.textContent = '正在转写，可继续使用问答';
+    } else {
+      outlineAsr.title = '没有字幕时，用语音转写生成带时间戳的字幕';
+      outlineAsrHint.textContent = '';
+    }
+  }
+
+  function setAsrProgress(progress: AsrProgress): void {
+    asrTranscribing = true;
+    asrDone = false;
+    clearOutlineError();
+    outlineEmpty.hidden = false;
+    outlineList.hidden = true;
+    const done = Math.max(0, Math.floor(progress.done));
+    const total = Math.max(1, Math.floor(progress.total));
+    if (progress.stage === 'download') {
+      outlineEmptyText.textContent = `正在下载音轨 ${done}/${total}…`;
+    } else if (progress.stage === 'slice') {
+      outlineEmptyText.textContent = `正在切片 ${done}/${total}…`;
+    } else {
+      outlineEmptyText.textContent = `正在转写 ${done}/${total}…`;
+    }
+    renderOutlineState();
+  }
+
+  function asrMatchesCurrent(message: {
+    bvid?: unknown;
+    p?: unknown;
+    cid?: unknown;
+  }): boolean {
+    return (
+      message.bvid === currentInfo.bvid &&
+      message.p === currentInfo.p &&
+      (message.cid ?? undefined) === (currentInfo.cid ?? undefined)
+    );
+  }
+
+  function failAsr(message: string, run: number): void {
+    if (run !== asrRunToken || asrKey !== outlineInfoKey(currentInfo)) return;
+    asrTranscribing = false;
+    setOutlineError(`转写失败：${message}`, () => void startAsr());
+  }
+
+  const onAsrMessage = (raw: unknown): void => {
+    if (!raw || typeof raw !== 'object') return;
+    const message = raw as {
+      type?: string;
+      bvid?: string;
+      p?: number;
+      cid?: number;
+      stage?: AsrProgress['stage'];
+      done?: number;
+      total?: number;
+      asr?: AsrResult;
+      error?: AsrError;
+    };
+    if (!asrMatchesCurrent(message)) return;
+
+    if (message.type === 'asr:progress') {
+      if (!message.stage) return;
+      setAsrProgress({
+        stage: message.stage,
+        done: typeof message.done === 'number' ? message.done : 0,
+        total: typeof message.total === 'number' ? message.total : 1,
+      });
+      return;
+    }
+    if (message.type === 'asr:done' && message.asr) {
+      asrTranscribing = false;
+      asrDone = true;
+      asrSegments = message.asr.segments.length;
+      asrKey = outlineInfoKey(currentInfo);
+      clearOutlineError();
+      outlineEmpty.hidden = false;
+      outlineEmptyText.textContent = `转写完成，已缓存 ${asrSegments} 句字幕。`;
+      renderOutlineState();
+      return;
+    }
+    if (message.type === 'asr:error') {
+      failAsr(message.error?.message ?? '转写失败', asrRunToken);
+    }
+  };
+  chrome.runtime.onMessage.addListener(onAsrMessage);
+
+  async function startAsr(): Promise<void> {
+    if (asrTranscribing || outlineGenerating) return;
+    if (!settings?.asrApiKey.trim()) {
+      updateAsrButton();
+      return;
+    }
+    if (!currentInfo.cid || !currentInfo.duration || currentInfo.duration <= 0) {
+      setOutlineError('还不知道当前分 P 的信息，暂时不能转写。', () => void startAsr());
+      return;
+    }
+
+    const requested = currentInfo;
+    const run = ++asrRunToken;
+    asrKey = outlineInfoKey(requested);
+    asrTranscribing = true;
+    asrDone = false;
+    asrSegments = 0;
+    clearOutlineError();
+    outlineEmpty.hidden = false;
+    outlineEmptyText.textContent = '正在准备音轨…';
+    renderOutlineState();
+
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'asr:transcribe',
+        bvid: requested.bvid,
+        p: requested.p,
+        cid: requested.cid,
+        title: requested.title,
+        duration: requested.duration,
+      })) as { ok?: boolean; message?: string } | undefined;
+      if (run !== asrRunToken || asrKey !== outlineInfoKey(currentInfo)) return;
+      if (!response) {
+        failAsr('后台没有响应', run);
+        return;
+      }
+      if (!response.ok) failAsr(response.message ?? '转写失败', run);
+    } catch (error) {
+      failAsr(error instanceof Error ? error.message : String(error), run);
+    }
+  }
+
+  outlineAsr.addEventListener('click', () => void startAsr());
 
   outlineHead.addEventListener('click', () => setOutlineExpanded(!outlineExpanded));
   outlineGenerate.addEventListener('click', () => void generateOutline());
@@ -1213,6 +1381,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       document.removeEventListener('pause', onPlayPause, true);
       document.removeEventListener('timeupdate', onOutlineTimeupdate, true);
       document.removeEventListener('seeked', onOutlineSeeked, true);
+      chrome.runtime.onMessage.removeListener(onAsrMessage);
       stopSyncPolling();
       window.clearTimeout(initialSync);
       if (captureTimer !== 0) window.clearTimeout(captureTimer);

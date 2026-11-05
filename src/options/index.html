@@ -58,7 +58,8 @@
       details.adv label {
         margin-top: 10px;
       }
-      input {
+      input,
+      select {
         width: 100%;
         box-sizing: border-box;
         padding: 9px 11px;
@@ -69,7 +70,8 @@
         font: inherit;
         outline: none;
       }
-      input:focus {
+      input:focus,
+      select:focus {
         border-color: #5b7cff;
       }
       button {
@@ -153,6 +155,19 @@
       <label class="check">
         <input id="frame-enabled" type="checkbox" />
         提问时附带当前画面
+      </label>
+
+      <label>
+        语音转写 Key（SiliconFlow，可选）
+        <input id="asr-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+      </label>
+
+      <label>
+        语音转写模型
+        <select id="asr-model">
+          <option value="FunAudioLLM/SenseVoiceSmall">FunAudioLLM/SenseVoiceSmall</option>
+          <option value="TeleAI/TeleSpeechASR">TeleAI/TeleSpeechASR</option>
+        </select>
       </label>
 
       <label class="check">

@@ -47,6 +47,26 @@ import {
 } from '../shared/qa';
 import { callDeepSeek, QaAbortError, QaError } from './deepseek';
 import { captureFrame } from './frame';
+import {
+  ASR_MAX_AUDIO_BYTES,
+  ASR_MAX_AUDIO_SECONDS,
+  ASR_REFERER_RULE_ID,
+  AsrFailure,
+  downloadAudio,
+  getAudioTrack,
+  transcribeAudio,
+} from './asr';
+import {
+  ASR_SCHEMA,
+  asrStorageKey,
+  mergeAsrSegments,
+  splitIntoSentences,
+  type AsrError,
+  type AsrErrorCode,
+  type AsrProgress,
+  type AsrResult,
+  type AsrTranscribeResponse,
+} from '../shared/asr';
 import { appendQaRecord, clearQaStore, readQaStore } from '../shared/qa-store';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
@@ -372,6 +392,129 @@ async function outlineForQuestion(payload: QaAskPayload): Promise<Outline['segme
   }
 }
 
+/* ------------------------- D8：ASR 兜底 ------------------------- */
+
+interface AsrRequest {
+  bvid: string;
+  p: number;
+  cid?: number;
+  title?: string;
+  duration?: number;
+}
+
+const asrJobs = new Map<string, Promise<AsrResult>>();
+
+function asrCues(result: AsrResult): SubtitleCue[] {
+  return result.segments.map(segment => ({
+    from: segment.start,
+    to: segment.end,
+    content: segment.text,
+  }));
+}
+
+async function readAsrResult(bvid: string, p: number, cid?: number): Promise<AsrResult | null> {
+  if (!cid) return null;
+  const key = asrStorageKey(bvid, p, cid);
+  const stored = await chrome.storage.local.get(key);
+  const record = stored[key] as (AsrResult & { schema?: number }) | undefined;
+  if (!record || !Array.isArray(record.segments) || record.segments.length === 0) return null;
+  if (record.bvid !== bvid || record.p !== p || record.cid !== cid) return null;
+  if (record.schema !== undefined && record.schema !== ASR_SCHEMA) return null;
+  const valid = record.segments.every(
+    segment =>
+      Number.isFinite(segment.start) &&
+      Number.isFinite(segment.end) &&
+      segment.end > segment.start &&
+      typeof segment.text === 'string' &&
+      segment.text.trim() !== '',
+  );
+  return valid ? record : null;
+}
+
+function sendAsrProgress(tabId: number, request: AsrRequest, progress: AsrProgress): void {
+  sendToTab(tabId, {
+    type: 'asr:progress',
+    bvid: request.bvid,
+    p: request.p,
+    cid: request.cid,
+    ...progress,
+  });
+}
+
+function asrError(error: unknown): AsrError {
+  if (error instanceof AsrFailure) {
+    return { code: error.code, message: error.message };
+  }
+  return {
+    code: 'unknown' as AsrErrorCode,
+    message: error instanceof Error ? error.message : '转写失败',
+  };
+}
+
+async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrResult> {
+  const settings = await loadSettings();
+  if (!settings.asrApiKey.trim()) {
+    throw new AsrFailure(
+      'no-key',
+      '还没有配置语音转写 Key，请到设置页填写（支持 SiliconFlow）',
+    );
+  }
+
+  const meta = await readVideoMeta(tabId);
+  if (!meta?.aid) throw new AsrFailure('no-audio', '读取不到视频信息');
+  const page = meta.pages.find(item => item.page === request.p) ?? meta.pages[request.p - 1];
+  const cid = request.cid ?? page?.cid;
+  if (!cid) throw new AsrFailure('no-audio', '读取不到当前分 P 的 cid');
+  const duration =
+    request.duration && request.duration > 0
+      ? request.duration
+      : page?.duration ?? meta.duration;
+  if (!duration || duration <= 0) throw new AsrFailure('unknown', '读取不到视频时长');
+
+  const cached = await readAsrResult(request.bvid, request.p, cid);
+  if (cached) return cached;
+
+  const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid);
+  sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 0, total: 1 });
+  const buffer = await downloadAudio(track.url);
+  sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 1, total: 1 });
+
+  if (buffer.byteLength > ASR_MAX_AUDIO_BYTES || duration > ASR_MAX_AUDIO_SECONDS) {
+    throw new AsrFailure(
+      'too-long',
+      '这段音频太长，暂不支持整段转写（A 路径上限约 45MB / 1 小时）',
+    );
+  }
+
+  sendAsrProgress(tabId, { ...request, cid }, { stage: 'transcribe', done: 0, total: 1 });
+  const text = await transcribeAudio(
+    buffer,
+    settings.asrApiKey,
+    settings.asrBaseUrl,
+    settings.asrModel,
+  );
+  sendAsrProgress(tabId, { ...request, cid }, { stage: 'transcribe', done: 1, total: 1 });
+
+  const segments = mergeAsrSegments(splitIntoSentences(text, 0, duration));
+  if (segments.length === 0) {
+    throw new AsrFailure('empty', '转写结果为空，请重试');
+  }
+
+  const result: AsrResult = {
+    bvid: request.bvid,
+    p: request.p,
+    cid,
+    duration,
+    segments,
+    model: settings.asrModel,
+    createdAt: Date.now(),
+  };
+  await chrome.storage.local.set({
+    [asrStorageKey(request.bvid, request.p, cid)]: { schema: ASR_SCHEMA, ...result },
+  });
+  return result;
+}
+
 async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue[]> {
   const cacheKey = payload.cid ? `sub:${payload.bvid}:${payload.p}:${payload.cid}` : '';
   const readCache = async (): Promise<SubtitleCue[]> => {
@@ -397,7 +540,12 @@ async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue
   } catch (error) {
     log('qa subtitle load failed', error);
   }
-  return readCache();
+  const afterLoad = await readCache();
+  if (afterLoad.length > 0) return afterLoad;
+
+  // 无字幕视频：如果用户已经转写过，就用 ASR 字幕回答。
+  const asr = await readAsrResult(payload.bvid, payload.p, payload.cid);
+  return asr ? asrCues(asr) : [];
 }
 
 /* ------------------------- D6：本地落盘同步 ------------------------- */
@@ -778,7 +926,12 @@ async function generateOutline(
         const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
         chapters = chaptersToSegments(points, request.duration);
       }
-      if (chapters.length < 2) throw error;
+      if (chapters.length < 2) {
+        // 第三级兜底优先用已缓存的 ASR；没有缓存才把 no-subtitle 抛回 UI 去抽帧。
+        const asr = await readAsrResult(request.bvid, request.p, request.cid);
+        if (asr) cues = asrCues(asr);
+        else throw error;
+      }
     }
 
     // 有 UP 章节就不必调模型：章节本身就是人写好的大纲。
@@ -1245,6 +1398,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'asr:transcribe') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p = typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    const cid =
+      typeof message.cid === 'number' && message.cid > 0 ? message.cid : undefined;
+    const duration =
+      typeof message.duration === 'number' && Number.isFinite(message.duration)
+        ? message.duration
+        : undefined;
+    const tabId = typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
+    if (!bvid || !p || tabId === undefined) {
+      sendResponse({
+        ok: false,
+        code: 'unknown',
+        message: '缺少 bvid/p 或标签页',
+      } satisfies AsrTranscribeResponse);
+      return false;
+    }
+
+    const request: AsrRequest = {
+      bvid,
+      p,
+      cid,
+      title: typeof message.title === 'string' ? message.title : undefined,
+      duration,
+    };
+    const jobKey = `${tabId}:${bvid}:${p}`;
+    let job = asrJobs.get(jobKey);
+    if (!job) {
+      job = transcribeAsr(tabId, request);
+      asrJobs.set(jobKey, job);
+      const pending = job;
+      void pending
+        .then(result => {
+          if (asrJobs.get(jobKey) === pending) asrJobs.delete(jobKey);
+          sendToTab(tabId, {
+            type: 'asr:done',
+            bvid: request.bvid,
+            p: request.p,
+            cid: request.cid,
+            asr: result,
+          });
+        })
+        .catch(error => {
+          if (asrJobs.get(jobKey) === pending) asrJobs.delete(jobKey);
+          sendToTab(tabId, {
+            type: 'asr:error',
+            bvid: request.bvid,
+            p: request.p,
+            cid: request.cid,
+            error: asrError(error),
+          });
+        });
+    }
+    sendResponse({ ok: true } satisfies AsrTranscribeResponse);
+    return false;
+  }
+
   if (message?.type === 'outline:get') {
     const bvid = typeof message.bvid === 'string' ? message.bvid : '';
     const p =
@@ -1376,6 +1587,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+/** 下载 B 站 CDN 音轨必须带 Referer；JS 设不了 forbidden header，交给 DNR 改写。 */
+function ensureAsrRefererRule(): void {
+  const rule: chrome.declarativeNetRequest.Rule = {
+    id: ASR_REFERER_RULE_ID,
+    priority: 1,
+    action: {
+      type: 'modifyHeaders',
+      requestHeaders: [
+        {
+          header: 'Referer',
+          operation: 'set',
+          value: 'https://www.bilibili.com/',
+        },
+      ],
+    },
+    condition: {
+      urlFilter: 'bilivideo.com',
+      resourceTypes: ['xmlhttprequest'],
+    },
+  };
+  void chrome.declarativeNetRequest
+    .updateDynamicRules({ removeRuleIds: [ASR_REFERER_RULE_ID], addRules: [rule] })
+    .catch(error => log('asr referer rule failed', error));
+}
+ensureAsrRefererRule();
+chrome.runtime.onInstalled.addListener(() => ensureAsrRefererRule());
+chrome.runtime.onStartup.addListener(() => ensureAsrRefererRule());
 
 chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(alarm => {

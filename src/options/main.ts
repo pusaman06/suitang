@@ -7,6 +7,8 @@ const visionModel = el<HTMLInputElement>('#vision-model');
 const textModel = el<HTMLInputElement>('#text-model');
 const thinking = el<HTMLInputElement>('#thinking');
 const frameEnabled = el<HTMLInputElement>('#frame-enabled');
+const asrApiKey = el<HTMLInputElement>('#asr-api-key');
+const asrModel = el<HTMLSelectElement>('#asr-model');
 const jumpAutoPlay = el<HTMLInputElement>('#jump-autoplay');
 const contextWindow = el<HTMLInputElement>('#context-window');
 const maxTokens = el<HTMLInputElement>('#max-tokens');
@@ -33,6 +35,8 @@ async function init(): Promise<void> {
   textModel.value = settings.textModel;
   thinking.checked = settings.thinking;
   frameEnabled.checked = settings.frameEnabled;
+  asrApiKey.value = settings.asrApiKey;
+  asrModel.value = settings.asrModel;
   jumpAutoPlay.checked = settings.jumpAutoPlay;
   contextWindow.value = String(settings.contextWindowSec);
   maxTokens.value = String(settings.maxTokens);
@@ -50,6 +54,8 @@ save.addEventListener('click', () => {
     textModel: textModel.value.trim() || DEFAULT_SETTINGS.textModel,
     thinking: thinking.checked,
     frameEnabled: frameEnabled.checked,
+    asrApiKey: asrApiKey.value.trim(),
+    asrModel: asrModel.value || DEFAULT_SETTINGS.asrModel,
     jumpAutoPlay: jumpAutoPlay.checked,
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
     maxTokens: Number(maxTokens.value) || DEFAULT_SETTINGS.maxTokens,
@@ -61,6 +67,8 @@ save.addEventListener('click', () => {
     contextWindow.value = String(next.contextWindowSec);
     maxTokens.value = String(next.maxTokens);
     historyTurns.value = String(next.historyTurns);
+    asrApiKey.value = next.asrApiKey;
+    asrModel.value = next.asrModel;
     jumpAutoPlay.checked = next.jumpAutoPlay;
     companionUrl.value =
       next.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : next.companionUrl;

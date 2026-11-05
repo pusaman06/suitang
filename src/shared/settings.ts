@@ -6,6 +6,8 @@
 export const SETTINGS_STORAGE_KEY = 'settings';
 export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_COMPANION_URL = 'http://127.0.0.1:8787';
+export const DEFAULT_ASR_BASE_URL = 'https://api.siliconflow.cn/v1';
+export const DEFAULT_ASR_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 
 export interface Settings {
   apiKey: string;
@@ -29,6 +31,12 @@ export interface Settings {
   companionUrl: string;
   /** D6 是否开启本地落盘同步。 */
   syncEnabled: boolean;
+  /** D8 语音转写 Key（SiliconFlow）。 */
+  asrApiKey: string;
+  /** D8 语音转写服务地址；末尾不带斜杠。 */
+  asrBaseUrl: string;
+  /** D8 语音转写模型。 */
+  asrModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -44,6 +52,9 @@ export const DEFAULT_SETTINGS: Settings = {
   frameEnabled: true,
   companionUrl: DEFAULT_COMPANION_URL,
   syncEnabled: true,
+  asrApiKey: '',
+  asrBaseUrl: DEFAULT_ASR_BASE_URL,
+  asrModel: DEFAULT_ASR_MODEL,
 };
 
 /** 旧版本存过退役别名，读出来时归一到现役模型。 */
@@ -71,16 +82,20 @@ function normalizeBaseUrl(value: unknown): string {
   return raw.replace(/\/+$/, '');
 }
 
-function normalizeCompanionUrl(value: unknown): string {
+function normalizeHttpUrl(value: unknown, fallback: string): string {
   const raw = typeof value === 'string' ? value.trim() : '';
-  if (raw === '') return DEFAULT_COMPANION_URL;
+  if (raw === '') return fallback;
   try {
     const url = new URL(raw);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_COMPANION_URL;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return fallback;
     return raw.replace(/\/+$/, '');
   } catch {
-    return DEFAULT_COMPANION_URL;
+    return fallback;
   }
+}
+
+function normalizeCompanionUrl(value: unknown): string {
+  return normalizeHttpUrl(value, DEFAULT_COMPANION_URL);
 }
 
 export function normalizeSettings(patch: Partial<Settings> | undefined | null): Settings {
@@ -100,6 +115,13 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
     // D6 新增：旧存档缺省指向本机默认端口，并默认开启同步。
     companionUrl: normalizeCompanionUrl(saved.companionUrl),
     syncEnabled: typeof saved.syncEnabled === 'boolean' ? saved.syncEnabled : DEFAULT_SETTINGS.syncEnabled,
+    // D8 新增：转写功能默认关闭（没有 Key），地址/模型缺省用 SiliconFlow。
+    asrApiKey: typeof saved.asrApiKey === 'string' ? saved.asrApiKey.trim() : DEFAULT_SETTINGS.asrApiKey,
+    asrBaseUrl: normalizeHttpUrl(saved.asrBaseUrl, DEFAULT_SETTINGS.asrBaseUrl),
+    asrModel:
+      typeof saved.asrModel === 'string' && saved.asrModel.trim() !== ''
+        ? saved.asrModel.trim()
+        : DEFAULT_SETTINGS.asrModel,
   };
 }
 

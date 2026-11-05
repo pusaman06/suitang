@@ -201,6 +201,7 @@
 .vt-outline-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -227,6 +228,39 @@
 .vt-outline-cost {
   color: #6f7891;
   font-size: 10.5px;
+}
+
+.vt-outline-asr {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 1px solid rgba(126, 162, 255, 0.22);
+  border-radius: 7px;
+  background: transparent;
+  color: #aab6d4;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.vt-outline-asr:hover {
+  border-color: rgba(126, 162, 255, 0.4);
+  background: rgba(79, 124, 255, 0.1);
+}
+
+.vt-outline-asr:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vt-outline-asr-hint {
+  flex-basis: 100%;
+  color: #79839b;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.vt-outline-asr-hint:empty {
+  display: none;
 }
 
 .vt-outline-list {
