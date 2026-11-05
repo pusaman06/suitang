@@ -18,6 +18,17 @@ pnpm build
 
 `dist/` 就是可加载的扩展目录。
 
+### 真实用例要 API Key
+
+`e2e/real-*.spec.ts` 打真接口。把 `.env.example` 复制成 `.env` 再填值：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`playwright.config.ts` 会自动加载 `.env`（`process.loadEnvFile`），没填 key 的用例会自动 skip 而不是报错。
+`.env` 已在 `.gitignore` 里，不会进仓库。
+
 ## 在 Edge 里加载
 
 1. 打开 `edge://extensions/`
