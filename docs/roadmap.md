@@ -87,7 +87,7 @@
 ### D5 大纲 ✅
 
 - **目标**：打开视频就知道它分几块。
-- **交付**：点「生成大纲」一次文本调用，按时长自适应 3–15 段 `{start, end, title}`，缓存到 `outline:<bvid>:<p>:<cid>`，面板内折叠区，点段跳转保持暂停。三级兜底：字幕 → UP 章节（`view_points`，不调模型）→ 抽帧（6/8/10 帧，`detail: low`，视觉模型 `frames-vision`）。
+- **交付**：点「生成大纲」一次文本调用，按时长自适应 3–15 段 `{start, end, title}`，缓存到 `outline:<bvid>:<p>:<cid>`，面板内折叠区，点段跳转保持暂停。三级兜底：字幕 → UP 章节（`view_points`，不调模型）→ 抽帧（6/8/10 帧，`detail: low`，视觉模型 `frames-vision`；模型只给标题，时间戳由帧时间算）。
 - **验收**：`pnpm e2e` 38 条绿；真实 Key 在 P1（891s）生成 9 段、4.6s，0–891s 首尾相接（`d5-real.png`）；`BV1XnxP6vEdX`（55s、无字幕无章节）抽 6 帧生成 5–6 段、6.5–8s（`d5-frames-real.png`）。
 - **怎么复跑**：`$env:DS_KEY='sk-...'; pnpm exec playwright test e2e/real-outline.spec.ts e2e/real-frames.spec.ts`（没有 Key 时自动跳过）。
 - **踩过的坑**：真实模型把 `start/end` 写成 `"10:32"` 字符串，`Number()` 得到 NaN，整份大纲被判坏格式（`e967cf4` 修：`toSeconds()` 兼容 mm:ss，prompt 也要求整数秒）；42 分钟视频被切成 27 段，超上限整份判坏（`60b56e5` 修：`coalesceSegments` 均匀合并）。
