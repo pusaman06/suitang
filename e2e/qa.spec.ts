@@ -293,6 +293,8 @@ test('拖悬浮球带走面板、面板自动换边、发送后清空、键盘�
     await page.mouse.down();
     await page.mouse.move(x, y, { steps: 8 });
     await page.mouse.up();
+    // 面板定位有 0.16s 过渡，等它落位再读坐标。
+    await page.waitForTimeout(300);
   };
 
   // 1. 拖到左上角：面板应当落在球右侧，并且完整留在视口里。

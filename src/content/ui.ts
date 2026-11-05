@@ -225,7 +225,12 @@ export function mountUi(info: VideoInfo): UiHandle {
   const toggle = () => {
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
+      // 首次打开时不要从 CSS 默认位置滑过来，直接落位。
+      panel.style.transition = 'none';
       placePanelNearBall();
+      window.requestAnimationFrame(() => {
+        panel.style.transition = '';
+      });
       input.focus();
       // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
       void loadOutline();
@@ -606,8 +611,10 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   /* -------- 问答 -------- */
 
-  const scrollAnswers = () => {
-    answers.scrollTop = answers.scrollHeight;
+  const scrollAnswers = (force = false) => {
+    // 用户往上翻历史时不要把他拽回底部；只有本来就在底部附近才跟随。
+    const distance = answers.scrollHeight - answers.scrollTop - answers.clientHeight;
+    if (force || distance < 60) answers.scrollTop = answers.scrollHeight;
   };
 
   const paintStream = () => {
@@ -642,7 +649,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     meta.className = 'vt-turn-meta';
     turn.append(q, a, meta);
     answers.append(turn);
-    scrollAnswers();
+    scrollAnswers(true);
     return { answer: a, text: '', meta };
   };
 
@@ -883,13 +890,16 @@ export function mountUi(info: VideoInfo): UiHandle {
     ball.style.right = 'auto';
   };
 
-  const placePanelNearBall = () => {
+  const placePanelNearBall = (side?: 'left' | 'right') => {
     if (panel.hidden) return;
     const width = panel.offsetWidth;
     const height = panel.offsetHeight;
     const rect = ball.getBoundingClientRect();
-    let left = rect.right + PANEL_GAP;
-    if (left + width > window.innerWidth - EDGE) left = rect.left - width - PANEL_GAP;
+    // 拖动过程中锁定在球的一侧，避免划过边界时面板左右横跳。
+    const preferLeft =
+      side === 'left' ||
+      (side === undefined && rect.right + PANEL_GAP + width > window.innerWidth - EDGE);
+    const left = preferLeft ? rect.left - width - PANEL_GAP : rect.right + PANEL_GAP;
     const top = rect.top + rect.height / 2 - height / 2;
     panel.style.left = `${clampValue(left, EDGE, window.innerWidth - width - EDGE)}px`;
     panel.style.top = `${clampValue(top, EDGE, window.innerHeight - height - EDGE)}px`;
@@ -904,11 +914,19 @@ export function mountUi(info: VideoInfo): UiHandle {
   });
 
   let ballDrag: { dx: number; dy: number; moved: boolean } | null = null;
+  let dragSide: 'left' | 'right' | null = null;
   let suppressBallClick = false;
 
   ball.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     const rect = ball.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    dragSide =
+      panelRect.width > 0 && panelRect.left + panelRect.width / 2 < rect.left + rect.width / 2
+        ? 'left'
+        : 'right';
+    // 拖动期间不做过渡，否则面板会拖尾。
+    panel.style.transition = 'none';
     ballDrag = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false };
     ball.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -921,7 +939,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     const y = event.clientY - ballDrag.dy;
     if (Math.abs(x - rect.left) + Math.abs(y - rect.top) > 3) ballDrag.moved = true;
     placeBall(x, y);
-    placePanelNearBall();
+    placePanelNearBall(dragSide ?? undefined);
   });
 
   const endBallDrag = (event: PointerEvent) => {
@@ -935,6 +953,10 @@ export function mountUi(info: VideoInfo): UiHandle {
         [BALL_POS_KEY]: { x: Math.round(rect.left), y: Math.round(rect.top) },
       });
     }
+    // 松手后恢复过渡，并按最终位置重新选边。
+    panel.style.transition = '';
+    dragSide = null;
+    placePanelNearBall();
     suppressBallClick = moved;
     window.setTimeout(() => {
       suppressBallClick = false;
