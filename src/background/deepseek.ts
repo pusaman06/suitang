@@ -271,6 +271,26 @@ async function streamOnce(
   return { text, reasoning, usage, finishReason };
 }
 
+/** 空回答 + 明确的结束原因时，给出比「模型没有返回内容」更准的文案。 */
+function assertFinishReason(result: DeepSeekResult): DeepSeekResult {
+  if (result.text.trim() !== '') return result;
+  if (result.finishReason === 'content_filter') {
+    throw new QaError({
+      code: 'filtered',
+      message: '回答被内容安全策略拦截了，换个问法试试',
+      retryable: false,
+    });
+  }
+  if (result.finishReason === 'insufficient_system_resource') {
+    throw new QaError({
+      code: 'server',
+      message: 'DeepSeek 算力紧张，这次没生成出内容，稍后重试',
+      retryable: true,
+    });
+  }
+  return result;
+}
+
 export async function callDeepSeek(request: DeepSeekRequest): Promise<DeepSeekResult> {
   const controller = new AbortController();
   let timeoutKind: 'idle' | 'total' | null = null;
@@ -300,11 +320,11 @@ export async function callDeepSeek(request: DeepSeekRequest): Promise<DeepSeekRe
 
   try {
     try {
-      return await streamOnce(request, true, controller, touch);
+      return assertFinishReason(await streamOnce(request, true, controller, touch));
     } catch (error) {
       if (error instanceof QaError && error.info.status === 400 && /stream_options/i.test(error.info.detail ?? '')) {
         // 某些代理不认 stream_options，去掉重试一次。
-        return await streamOnce(request, false, controller, touch);
+        return assertFinishReason(await streamOnce(request, false, controller, touch));
       }
       throw error;
     }

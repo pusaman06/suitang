@@ -155,9 +155,24 @@
         提问时附带当前画面
       </label>
 
+      <label class="check">
+        <input id="jump-autoplay" type="checkbox" />
+        点回答里的时间戳后自动播放（默认保持暂停）
+      </label>
+
       <label>
         上下文窗口（秒，当前时间前后各取这么多）
         <input id="context-window" type="number" min="30" max="300" step="10" />
+      </label>
+
+      <label>
+        单次回答长度上限（tokens，256–8192）
+        <input id="max-tokens" type="number" min="256" max="8192" step="256" />
+      </label>
+
+      <label>
+        追问时带上最近几轮问答（0–5，0 表示不带）
+        <input id="history-turns" type="number" min="0" max="5" step="1" />
       </label>
 
       <details class="adv">

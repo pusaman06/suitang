@@ -7,7 +7,10 @@ const visionModel = el<HTMLInputElement>('#vision-model');
 const textModel = el<HTMLInputElement>('#text-model');
 const thinking = el<HTMLInputElement>('#thinking');
 const frameEnabled = el<HTMLInputElement>('#frame-enabled');
+const jumpAutoPlay = el<HTMLInputElement>('#jump-autoplay');
 const contextWindow = el<HTMLInputElement>('#context-window');
+const maxTokens = el<HTMLInputElement>('#max-tokens');
+const historyTurns = el<HTMLInputElement>('#history-turns');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
 const companionUrl = el<HTMLInputElement>('#companion-url');
 const syncEnabled = el<HTMLInputElement>('#sync-enabled');
@@ -30,7 +33,10 @@ async function init(): Promise<void> {
   textModel.value = settings.textModel;
   thinking.checked = settings.thinking;
   frameEnabled.checked = settings.frameEnabled;
+  jumpAutoPlay.checked = settings.jumpAutoPlay;
   contextWindow.value = String(settings.contextWindowSec);
+  maxTokens.value = String(settings.maxTokens);
+  historyTurns.value = String(settings.historyTurns);
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
   companionUrl.value =
     settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
@@ -44,12 +50,18 @@ save.addEventListener('click', () => {
     textModel: textModel.value.trim() || DEFAULT_SETTINGS.textModel,
     thinking: thinking.checked,
     frameEnabled: frameEnabled.checked,
+    jumpAutoPlay: jumpAutoPlay.checked,
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
+    maxTokens: Number(maxTokens.value) || DEFAULT_SETTINGS.maxTokens,
+    historyTurns: Number(historyTurns.value),
     apiBaseUrl: apiBaseUrl.value.trim(),
     companionUrl: companionUrl.value.trim(),
     syncEnabled: syncEnabled.checked,
   }).then(next => {
     contextWindow.value = String(next.contextWindowSec);
+    maxTokens.value = String(next.maxTokens);
+    historyTurns.value = String(next.historyTurns);
+    jumpAutoPlay.checked = next.jumpAutoPlay;
     companionUrl.value =
       next.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : next.companionUrl;
     status.textContent = '已保存';
