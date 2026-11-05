@@ -212,7 +212,7 @@ function normalizePage(bvid, p, body) {
 
 function toCourseMarkdown(course) {
   const lines = [`# ${course.title || course.bvid}`, ''];
-  lines.push(`- UP：${course.owner || '未知'}`);
+  if (course.owner) lines.push(`- UP：${course.owner}`);
   lines.push(`- P 数：${course.pageCount ?? course.pages.length}`);
   lines.push(`- 链接：https://www.bilibili.com/video/${course.bvid}/`);
   lines.push('');
@@ -252,7 +252,7 @@ function subtitleBlocks(subtitle) {
 function toPageMarkdown(page) {
   const title = page.partTitle || page.title || `P${page.p}`;
   const lines = [`# ${title}`, '', '## 基本信息', ''];
-  lines.push(`- UP：${page.owner || '未知'}`);
+  if (page.owner) lines.push(`- UP：${page.owner}`);
   lines.push(`- 时长：${formatTime(page.duration)}`);
   lines.push(
     `- 第 ${page.p} P${page.pageCount ? ` / ${page.pageCount} P` : ''}`,
