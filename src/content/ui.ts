@@ -32,7 +32,10 @@ export function mountUi(info: VideoInfo): UiHandle {
     <section class="vt-panel" hidden>
       <div class="vt-head">
         <span class="vt-title">Video Tutor</span>
-        <button class="vt-close" title="关闭">×</button>
+        <span class="vt-head-actions">
+          <button class="vt-gear" type="button" title="设置">⚙</button>
+          <button class="vt-close" type="button" title="关闭">×</button>
+        </span>
       </div>
       <div class="vt-meta">
         <div class="vt-course"></div>
@@ -78,6 +81,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const ball = must<HTMLButtonElement>(shadow, '.vt-ball');
   const panel = must<HTMLElement>(shadow, '.vt-panel');
   const close = must<HTMLButtonElement>(shadow, '.vt-close');
+  const gear = must<HTMLButtonElement>(shadow, '.vt-gear');
   const course = must<HTMLElement>(shadow, '.vt-course');
   const part = must<HTMLElement>(shadow, '.vt-part');
   const ids = must<HTMLElement>(shadow, '.vt-ids');
@@ -233,6 +237,10 @@ export function mountUi(info: VideoInfo): UiHandle {
   };
 
   ball.addEventListener('click', toggle);
+  gear.addEventListener('click', () => {
+    // content script 的 chrome.runtime 没有 openOptionsPage，转给 background。
+    void chrome.runtime.sendMessage({ type: 'options:open' });
+  });
   close.addEventListener('click', () => {
     panel.hidden = true;
     stopSyncPolling();

@@ -945,6 +945,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'options:open') {
+    // content script 拿不到 openOptionsPage，这里代它打开设置页。
+    void chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message?.type === 'qa:history') {
     const bvid = typeof message.bvid === 'string' ? message.bvid : '';
     const p = typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;

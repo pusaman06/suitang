@@ -100,7 +100,11 @@ export async function fetchSubtitlesFromOptions(
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/src/options/index.html`);
   try {
-    return (await page.evaluate(async () => {
+    let last: SubtitleDiagnosticsResult = { ok: false, error: '没有执行' };
+    // B 站的 x/player/v2 偶尔返回空字幕列表（不是真没字幕），重试几次再判失败。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await page.waitForTimeout(800);
+      last = (await page.evaluate(async () => {
       const tabs = await chrome.tabs.query({ url: 'https://www.bilibili.com/video/*' });
       const tab = tabs[tabs.length - 1];
       if (!tab?.id || !tab.url) return { ok: false, error: '没有打开的视频页' };
@@ -122,7 +126,10 @@ export async function fetchSubtitlesFromOptions(
         duration: part.duration,
         tabId: tab.id,
       })) as SubtitleDiagnosticsResult;
-    })) as SubtitleDiagnosticsResult;
+      })) as SubtitleDiagnosticsResult;
+      if (last.ok) return last;
+    }
+    return last;
   } finally {
     await page.close();
   }

@@ -154,6 +154,23 @@ test('刷新后历史还在，清空后消失', async () => {
   await expect(page.locator('.vt-clear')).toBeHidden();
 });
 
+test('面板右上角的齿轮能打开设置页', async () => {
+  await openPanel(page, VIDEO_URL);
+  await expect(page.locator('.vt-gear')).toBeVisible();
+
+  await page.locator('.vt-gear').click();
+  await expect
+    .poll(() => context.pages().some(target => target.url().includes('src/options/index.html')), {
+      timeout: 5_000,
+    })
+    .toBe(true);
+
+  for (const target of context.pages()) {
+    if (target.url().includes('src/options/index.html')) await target.close();
+  }
+  await page.bringToFront();
+});
+
 test('没有 API Key 时不发请求，面板给出提示', async () => {
   await writeSettings(context, extensionId, { apiKey: '', apiBaseUrl: baseUrl });
   const before = mock.requests.length;

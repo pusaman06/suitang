@@ -76,6 +76,26 @@
   letter-spacing: 0.2px;
 }
 
+.vt-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vt-gear {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #8b93a8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vt-gear:hover {
+  color: #fff;
+}
+
 .vt-close {
   padding: 0 2px;
   border: 0;
