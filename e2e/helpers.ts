@@ -37,6 +37,8 @@ export async function launchWithExtension(): Promise<BrowserContext> {
       `--load-extension=${EXTENSION_PATH}`,
       // D6：允许扩展从页面访问 127.0.0.1 的 companion。
       '--disable-features=BlockInsecurePrivateNetworkRequests',
+      // 测试会在真机上播放 B 站视频，整机静音，免得来回开关声音吵到人。
+      '--mute-audio',
     ],
   });
 }
