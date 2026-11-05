@@ -68,6 +68,7 @@ export function buildOutlinePrompt(input: OutlinePromptInput): OutlinePrompt | n
 /**
  * 无字幕/无章节时的视觉大纲 prompt：按时间顺序把截图和对应时间戳交叠发给模型。
  * 图片用 low detail（每张约 384 token），大字卡片也够读。
+ * 只让模型给标题——时间戳由 `framesToSegments` 按帧时间算，避免整体错位。
  */
 export function buildFrameOutlinePrompt(input: FrameOutlinePromptInput): FrameOutlinePrompt | null {
   const frames = input.frames.filter(
@@ -80,13 +81,11 @@ export function buildFrameOutlinePrompt(input: FrameOutlinePromptInput): FrameOu
 
   const range = segmentRange(input.duration);
   const system = [
-    `你是课程笔记助手。下面是视频《${input.title}》（时长 ${formatTimestamp(input.duration)}）按时间顺序抽取的截图。`,
-    `请据此把视频分成 ${range.min}–${range.max} 个主题段，输出 JSON 数组，每项 {start, end, title}，start 和 end 是整数秒。`,
-    'title 用 8–16 个汉字，概括这一段在讲什么。',
-    '硬约束：',
-    '1. 按时间顺序首尾相接覆盖全片：首段 start=0，末段 end ≥ 视频时长。',
-    '2. 时间只能参考每张截图的标注，不要编造画面里没有的内容。',
-    '3. 只输出 JSON 数组，不要 markdown 围栏，不要解释。',
+    `你是课程笔记助手。下面是视频《${input.title}》（时长 ${formatTimestamp(input.duration)}）按时间顺序抽取的 ${frames.length} 张截图，每张前面标了它在视频里的时间。`,
+    `请为每张截图写一个 8–14 个汉字的标题，概括这一屏在讲什么。`,
+    '相邻两张如果是同一个主题，标题写成完全一样的，我会把相同标题合并成一段。',
+    `只输出 JSON 字符串数组，长度必须正好是 ${frames.length}，例如 ["开场介绍","一句话出图"]。`,
+    '不要 markdown 围栏，不要解释，不要输出时间。',
   ].join('\n');
 
   const content: ChatContentPart[] = [];

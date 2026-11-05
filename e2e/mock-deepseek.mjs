@@ -20,6 +20,16 @@ export const DEFAULT_OUTLINE_ANSWER = JSON.stringify([
   { start: 800, end: 900, title: '总结与后续学习建议' },
 ]);
 
+// 6 张截图 → 6 个标题；相邻相同会被 framesToSegments 合并。
+export const DEFAULT_FRAME_TITLES = JSON.stringify([
+  '开场与目标说明',
+  '一句话出图',
+  '手机操控演示',
+  '语音输入',
+  '扫码查看与分享',
+  '公测信息与安装',
+]);
+
 function isOutlineRequest(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   return messages.some(
@@ -27,16 +37,37 @@ function isOutlineRequest(body) {
   );
 }
 
+/** 抽帧大纲请求：大纲的 system 提示 + user 里夹了 image_url。问答带图不算。 */
+function isFrameRequest(body) {
+  return isOutlineRequest(body) && countFrameImages(body) > 0;
+}
+
+function countFrameImages(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  let count = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) if (part?.type === 'image_url') count += 1;
+  }
+  return count;
+}
+
+/** 标题数量必须和截图数一致，后端按这个做长度校验。 */
+function frameTitlesFor(count) {
+  return JSON.stringify(Array.from({ length: count }, (_, index) => `第 ${index + 1} 段主题`));
+}
+
 function sseChunk(payload) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
 export function createMockServer() {
-  /** @type {{ status: number, answer: string, outlineAnswer: string, delayMs: number }} */
+  /** @type {{ status: number, answer: string, outlineAnswer: string, frameAnswer: string, delayMs: number }} */
   const state = {
     status: 200,
     answer: DEFAULT_ANSWER,
     outlineAnswer: DEFAULT_OUTLINE_ANSWER,
+    frameAnswer: DEFAULT_FRAME_TITLES,
     delayMs: 80,
   };
   /** @type {Array<{ method: string, url: string, headers: Record<string, string>, body: any }>} */
@@ -81,7 +112,13 @@ export function createMockServer() {
       });
 
       const pieces = [];
-      let rest = isOutlineRequest(body) ? state.outlineAnswer : state.answer;
+      const frameCount = isFrameRequest(body) ? countFrameImages(body) : 0;
+      let rest =
+        frameCount > 0
+          ? frameTitlesFor(frameCount)
+          : isOutlineRequest(body)
+            ? state.outlineAnswer
+            : state.answer;
       // 切成 6 字左右的小片，模拟逐字返回。
       while (rest.length > 0) {
         pieces.push(rest.slice(0, 6));
@@ -134,6 +171,7 @@ export function createMockServer() {
       state.status = 200;
       state.answer = DEFAULT_ANSWER;
       state.outlineAnswer = DEFAULT_OUTLINE_ANSWER;
+      state.frameAnswer = DEFAULT_FRAME_TITLES;
       state.delayMs = 80;
     },
   };

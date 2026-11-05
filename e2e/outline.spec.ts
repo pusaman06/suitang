@@ -366,7 +366,7 @@ test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复�
 
     const beforeRequests = mock.requests.length;
     await page.locator('.vt-outline-generate').click();
-    await expect(page.locator('.vt-outline-state')).toHaveText('9 段', { timeout: 60_000 });
+    await expect(page.locator('.vt-outline-state')).toHaveText(/\d+ 段/, { timeout: 60_000 });
 
     // 抓帧结束后回到原时间；先等 seek 完成再看。
     await page.waitForFunction(
@@ -405,7 +405,11 @@ test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复�
     }
     expect(parts.some(part => part.type === 'text' && part.text?.includes('第 1 张'))).toBe(true);
 
-    await expect(page.locator('.vt-outline-item')).toHaveCount(9);
+    const frameItems = page.locator('.vt-outline-item');
+    await expect(frameItems.first()).toBeVisible();
+    // 标题由 mock 按截图数生成，段数应等于截图数；时间戳由帧时间算，首段必为 00:00。
+    expect(await frameItems.count()).toBe(images.length);
+    await expect(frameItems.first()).toContainText('00:00');
     await page.screenshot({ path: join(SHOT_DIR, 'd5-frames.png'), fullPage: false });
   } finally {
     await context.unroute('**/x/player/v2**', emptyRoute);

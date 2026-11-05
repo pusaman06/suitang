@@ -222,3 +222,76 @@ export function coalesceSegments(segments: OutlineSegment[], max: number): Outli
   }
   return merged;
 }
+
+/**
+ * 抽帧大纲只让模型给标题，时间戳由我们按帧时间算。
+ * 之前让模型自己写 start/end，它会把「第 i 张图」的内容标到第 i-1 段上，
+ * 整份大纲的时间整体提前一个帧间隔。
+ */
+export function parseFrameTitles(text: string, expected: number): string[] | null {
+  const source = String(text).replace(/```(?:json)?/gi, '').trim();
+  const first = source.indexOf('[');
+  const last = source.lastIndexOf(']');
+  if (first < 0 || last <= first) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source.slice(first, last + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const titles: string[] = [];
+  for (const item of parsed) {
+    if (typeof item === 'string') {
+      titles.push(item.trim());
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const raw = item as Record<string, unknown>;
+      const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+      titles.push(title);
+      continue;
+    }
+    titles.push('');
+  }
+
+  if (titles.length !== expected || titles.some(title => title === '')) return null;
+  return titles;
+}
+
+/**
+ * 帧时间 → 分段：相邻同标题合并，段边界取两张截图时间的中点。
+ * 这样每段一定从「那张图真正出现的时刻」附近开始，不会整体错位。
+ */
+export function framesToSegments(
+  times: number[],
+  titles: string[],
+  duration: number,
+): OutlineSegment[] {
+  if (times.length === 0 || times.length !== titles.length) return [];
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : times[times.length - 1] + 1;
+
+  // 相邻同标题视作同一段（模型被要求对同一主题写同样标题）。
+  const groups: Array<{ first: number; title: string }> = [];
+  for (let index = 0; index < times.length; index += 1) {
+    const title = titles[index];
+    const last = groups[groups.length - 1];
+    if (last && last.title === title) continue;
+    groups.push({ first: index, title });
+  }
+  if (groups.length === 0) return [];
+
+  return groups.map((group, index) => {
+    const start =
+      index === 0
+        ? 0
+        : Math.round((times[groups[index - 1].first] + times[group.first]) / 2);
+    const next = groups[index + 1];
+    const end = next
+      ? Math.round((times[group.first] + times[next.first]) / 2)
+      : Math.round(safeDuration);
+    return { start, end: Math.max(end, start + 1), title: group.title };
+  });
+}

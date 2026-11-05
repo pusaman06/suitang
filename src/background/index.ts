@@ -11,7 +11,9 @@ import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
 import { buildFrameOutlinePrompt, buildOutlinePrompt } from '../shared/outline-prompt';
 import {
   coalesceSegments,
+  framesToSegments,
   outlineStorageKey,
+  parseFrameTitles,
   parseOutline,
   type Outline,
   type OutlineErrorCode,
@@ -698,7 +700,7 @@ async function generateFrameOutline(
     model: settings.visionModel,
     messages: prompt.messages,
     thinking: false,
-    maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
+    maxTokens: Math.min(2048, Math.max(512, frames.length * 60)),
     temperature: 0.2,
     onChunk: (kind, chunk) => {
       if (kind === 'answer') text += chunk;
@@ -710,9 +712,18 @@ async function generateFrameOutline(
     throw new OutlineFailure('empty', '模型没有返回内容，请重试');
   }
 
-  const segments = parseOutline(raw, request.duration, prompt.range);
-  if (!segments) {
+  // 只信模型给的标题；时间戳由帧时间算，避免整份大纲错位一个帧间隔。
+  const times = frames
+    .filter(frame => Number.isFinite(frame.at))
+    .map(frame => frame.at);
+  const titles = parseFrameTitles(raw, times.length);
+  if (!titles) {
     log('frame outline raw output', raw.slice(0, 1500));
+    throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+  }
+
+  const segments = framesToSegments(times, titles, request.duration);
+  if (segments.length === 0) {
     throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
   }
 
