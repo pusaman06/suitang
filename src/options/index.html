@@ -39,6 +39,25 @@
         color: #c7cee0;
         font-size: 13px;
       }
+      label.check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      label.check input {
+        width: auto;
+      }
+      details.adv {
+        margin: 4px 0 18px;
+        color: #8b93a8;
+        font-size: 13px;
+      }
+      summary {
+        cursor: pointer;
+      }
+      details.adv label {
+        margin-top: 10px;
+      }
       input {
         width: 100%;
         box-sizing: border-box;
@@ -90,6 +109,24 @@
         文本模型
         <input id="text-model" type="text" />
       </label>
+
+      <label class="check">
+        <input id="thinking" type="checkbox" />
+        开启 thinking（更慢更贵，回答更稳）
+      </label>
+
+      <label>
+        上下文窗口（秒，当前时间前后各取这么多）
+        <input id="context-window" type="number" min="30" max="300" step="10" />
+      </label>
+
+      <details class="adv">
+        <summary>高级</summary>
+        <label>
+          API 地址（留空用 https://api.deepseek.com）
+          <input id="api-base-url" type="text" placeholder="https://api.deepseek.com" autocomplete="off" />
+        </label>
+      </details>
 
       <button id="save">保存</button>
       <p id="status" role="status"></p>

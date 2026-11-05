@@ -1,0 +1,197 @@
+import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { join } from 'node:path';
+import {
+  NO_SUBTITLE_VIDEO_URL,
+  SHOT_DIR,
+  VIDEO_URL,
+  clearStorage,
+  getExtensionId,
+  hasLoginCookie,
+  isOursError,
+  launchWithExtension,
+  writeSettings,
+} from './helpers';
+// @ts-expect-error 本地 mock 是 .mjs，没有类型声明
+import { DEFAULT_ANSWER, createMockServer } from './mock-deepseek.mjs';
+
+let context: BrowserContext;
+let extensionId: string;
+let mock: ReturnType<typeof createMockServer>;
+let baseUrl: string;
+let page: Page;
+const ourErrors: string[] = [];
+
+function watch(page: Page): void {
+  page.on('console', message => {
+    if (message.type() === 'error' && isOursError(message.text())) ourErrors.push(message.text());
+  });
+  page.on('pageerror', error => {
+    if (isOursError(String(error))) ourErrors.push(String(error));
+  });
+}
+
+test.describe.configure({ mode: 'serial' });
+
+test.beforeAll(async () => {
+  context = await launchWithExtension();
+  extensionId = await getExtensionId(context);
+  if (!(await hasLoginCookie(context))) {
+    test.skip(true, '需要先在 .e2e/profile 里登录 B 站（pnpm e2e:login）');
+    return;
+  }
+  mock = createMockServer();
+  baseUrl = await mock.listen();
+  await clearStorage(context, extensionId);
+  page = await context.newPage();
+  watch(page);
+});
+
+test.afterAll(async () => {
+  expect(ourErrors, ourErrors.join('\n')).toEqual([]);
+  await context?.close();
+  await mock?.close();
+});
+
+async function openPanel(target: Page, url: string): Promise<void> {
+  await target.goto(url, { waitUntil: 'domcontentloaded' });
+  await expect(target.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+  await target.locator('.vt-ball').click();
+  await expect(target.locator('.vt-panel')).toBeVisible();
+}
+
+test('请求体符合协议，回答含可点击 [mm:ss] 且能跳转', async () => {
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-test',
+    apiBaseUrl: baseUrl,
+    textModel: 'deepseek-flash',
+    maxTokens: 2048,
+    thinking: false,
+    contextWindowSec: 90,
+  });
+
+  await openPanel(page, VIDEO_URL);
+  // 先走 D2 的路径把字幕灌进缓存，问答才有「附近字幕」可发。
+  await page.locator('.vt-sub').click();
+  await expect(page.locator('.vt-log')).toContainText(/共 \d+ 条/, { timeout: 60_000 });
+
+  const before = mock.requests.length;
+  await page.locator('.vt-input').fill('这段在讲什么？');
+  const startedAt = Date.now();
+  await page.locator('.vt-send').click();
+
+  const answer = page.locator('.vt-a').first();
+  await expect(answer).not.toBeEmpty({ timeout: 5_000 });
+  expect(Date.now() - startedAt).toBeLessThan(5_000);
+
+  await expect(answer).toContainText('测试全文结束', { timeout: 20_000 });
+  await expect(page.locator('.vt-turn-meta').first()).toContainText('tokens');
+
+  const rendered = (await answer.innerText()).replace(/\s+/g, '');
+  expect(rendered).toBe(DEFAULT_ANSWER.replace(/\s+/g, ''));
+
+  expect(mock.requests.length).toBe(before + 1);
+  const body = mock.requests[mock.requests.length - 1]?.body as {
+    model?: string;
+    stream?: boolean;
+    stream_options?: { include_usage?: boolean };
+    thinking?: { type?: string };
+    max_tokens?: number;
+    temperature?: number;
+    messages?: Array<{ role: string; content: string }>;
+  };
+  expect(body.model).toBe('deepseek-flash');
+  expect(body.stream).toBe(true);
+  expect(body.stream_options).toEqual({ include_usage: true });
+  expect(body.thinking).toEqual({ type: 'disabled' });
+  expect(body.max_tokens).toBe(2048);
+  expect(body.temperature).toBeCloseTo(0.3, 5);
+
+  const messages = body.messages ?? [];
+  const system = messages.find(item => item.role === 'system');
+  expect(system?.content).toContain('只依据给定的字幕');
+  const user = messages[messages.length - 1];
+  expect(user?.role).toBe('user');
+  expect(user?.content).toContain('附近字幕（');
+  expect(user?.content).toContain('这段在讲什么？');
+
+  const cite = page.locator('a.vt-cite').first();
+  await expect(cite).toHaveAttribute('data-t', '12');
+  await expect(cite).toHaveText('[00:12]');
+  await cite.click();
+  await page.waitForFunction(
+    () => {
+      const video = document.querySelector('video');
+      return !!video && video.currentTime >= 11 && video.currentTime <= 13;
+    },
+    null,
+    { timeout: 5_000 },
+  );
+
+  await page.screenshot({ path: join(SHOT_DIR, 'd3-qa.png'), fullPage: false });
+});
+
+test('没有 API Key 时不发请求，面板给出提示', async () => {
+  await writeSettings(context, extensionId, { apiKey: '', apiBaseUrl: baseUrl });
+  const before = mock.requests.length;
+
+  await page.locator('.vt-input').fill('没有 key 的问题');
+  await page.locator('.vt-send').click();
+
+  const errorBox = page.locator('.vt-error').last();
+  await expect(errorBox).toContainText('API Key', { timeout: 10_000 });
+  expect(mock.requests.length).toBe(before);
+});
+
+test('401 显示鉴权失败文案', async () => {
+  await writeSettings(context, extensionId, { apiKey: 'sk-bad', apiBaseUrl: baseUrl });
+  mock.state.status = 401;
+  try {
+    await page.locator('.vt-input').fill('401 的问题');
+    await page.locator('.vt-send').click();
+    await expect(page.locator('.vt-error').last()).toContainText('401', { timeout: 15_000 });
+  } finally {
+    mock.state.status = 200;
+  }
+});
+
+test('无字幕视频：不编造字幕，仍能回答', async () => {
+  await clearStorage(context, extensionId);
+  await writeSettings(context, extensionId, { apiKey: 'sk-e2e-test', apiBaseUrl: baseUrl });
+
+  // 该样本有登录态时其实带字幕；把 player/v2 返回的字幕列表清空，稳定复现「无字幕」。
+  const stripSubtitles = async (route: Route) => {
+    const response = await route.fetch();
+    const json = (await response.json()) as { data?: { subtitle?: { subtitles?: unknown[] } } };
+    if (json.data?.subtitle) json.data.subtitle.subtitles = [];
+    await route.fulfill({ response, json });
+  };
+  await context.route('**/x/player/v2**', stripSubtitles);
+
+  const bare = await context.newPage();
+  watch(bare);
+  try {
+    await openPanel(bare, NO_SUBTITLE_VIDEO_URL);
+
+    await bare.locator('.vt-input').fill('这个视频讲什么？');
+    await bare.locator('.vt-send').click();
+    await expect(bare.locator('.vt-status')).toContainText('无字幕 · 只能按标题回答', {
+      timeout: 20_000,
+    });
+
+    const answer = bare.locator('.vt-a').first();
+    await expect(answer).toContainText('测试全文结束', { timeout: 20_000 });
+
+    const body = mock.requests[mock.requests.length - 1]?.body as {
+      messages?: Array<{ role: string; content: string }>;
+    };
+    const messages = body.messages ?? [];
+    const system = messages.find(item => item.role === 'system');
+    const user = messages[messages.length - 1];
+    expect(system?.content).toContain('不要编造');
+    expect(user?.content).not.toContain('附近字幕');
+    expect(user?.content).toContain('这个视频讲什么？');
+  } finally {
+    await context.unroute('**/x/player/v2**', stripSubtitles);
+    await bare.close();
+  }
+});

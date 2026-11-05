@@ -1,4 +1,5 @@
 import type { VideoInfo, VideoMeta } from '../shared/types';
+import { clampSeconds } from '../shared/citations';
 
 function readBvid(): string | null {
   const match = location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
@@ -68,4 +69,31 @@ function requestVideoMeta(bvid: string): Promise<VideoMeta | null> {
       resolve(reply ?? null);
     });
   });
+}
+
+/** 当前页面的 <video>；B 站切 P 会复用同一个元素。 */
+export function getVideoElement(): HTMLVideoElement | null {
+  return document.querySelector('video');
+}
+
+export function getPlaybackTime(): number {
+  const video = getVideoElement();
+  return video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+}
+
+/**
+ * 跳转并恢复播放状态：跳之前正在播就继续播，本来暂停就保持暂停；
+ * autoPlay 为 true 时强制播放（设置项 jumpAutoPlay）。
+ */
+export function seekVideo(seconds: number, options: { autoPlay?: boolean } = {}): boolean {
+  const video = getVideoElement();
+  if (!video) return false;
+  const wasPlaying = !video.paused;
+  video.currentTime = clampSeconds(seconds, Number.isFinite(video.duration) ? video.duration : undefined);
+  if (options.autoPlay || wasPlaying) {
+    void video.play().catch(() => undefined);
+  } else {
+    video.pause();
+  }
+  return true;
 }

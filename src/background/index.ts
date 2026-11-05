@@ -6,6 +6,18 @@ import type {
   VideoMeta,
 } from '../shared/types';
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
+import { loadSettings } from '../shared/settings';
+import { buildQaPrompt } from '../shared/prompt';
+import { extractCitationSeconds } from '../shared/citations';
+import {
+  QA_PORT_NAME,
+  type QaAskPayload,
+  type QaClientMessage,
+  type QaErrorInfo,
+  type QaServerMessage,
+  type QaUsage,
+} from '../shared/qa';
+import { callDeepSeek, QaAbortError, QaError } from './deepseek';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
 
@@ -294,6 +306,229 @@ async function loadSubtitles(
 }
 
 
+
+/* ------------------------- D3：vt-qa 常驻端口 ------------------------- */
+
+interface ActiveQa {
+  requestId: string;
+  controller: AbortController;
+  reason: 'user' | 'superseded' | 'tab-closed';
+}
+
+const activeByTab = new Map<number, ActiveQa>();
+
+function postToPort(port: chrome.runtime.Port, message: QaServerMessage): void {
+  try {
+    port.postMessage(message);
+  } catch {
+    // 端口已断开（页面刷新/关闭），忽略。
+  }
+}
+
+async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue[]> {
+  const cacheKey = payload.cid ? `sub:${payload.bvid}:${payload.p}:${payload.cid}` : '';
+  const readCache = async (): Promise<SubtitleCue[]> => {
+    if (!cacheKey) return [];
+    const stored = await chrome.storage.local.get(cacheKey);
+    const cached = stored[cacheKey] as SubtitleCache | undefined;
+    return cached?.cues ?? [];
+  };
+
+  const cached = await readCache();
+  if (cached.length > 0) return cached;
+
+  // 缓存没有就顺手抓一次（和 D2 的按钮同一条路径），抓不到就按无字幕处理。
+  if (!payload.aid || !payload.cid) return [];
+  try {
+    await loadSubtitles(tabId, {
+      bvid: payload.bvid,
+      aid: payload.aid,
+      cid: payload.cid,
+      p: payload.p,
+      duration: payload.duration,
+    });
+  } catch (error) {
+    log('qa subtitle load failed', error);
+  }
+  return readCache();
+}
+
+async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAskPayload): Promise<void> {
+  const tabId = port.sender?.tab?.id;
+  if (tabId === undefined) {
+    postToPort(port, {
+      v: 1,
+      type: 'qa:error',
+      requestId,
+      error: { code: 'no-cid', message: '找不到当前标签页', retryable: false },
+    });
+    return;
+  }
+
+  // 同一 tab 只保留一个活动请求，新的顶掉旧的。
+  const previous = activeByTab.get(tabId);
+  if (previous) {
+    previous.reason = 'superseded';
+    previous.controller.abort();
+  }
+  const active: ActiveQa = { requestId, controller: new AbortController(), reason: 'user' };
+  activeByTab.set(tabId, active);
+  const controller = active.controller;
+  let text = '';
+  let reasoning = '';
+
+  try {
+    const settings = await loadSettings();
+    if (!settings.apiKey.trim()) {
+      postToPort(port, {
+        v: 1,
+        type: 'qa:error',
+        requestId,
+        error: { code: 'no-key', message: '还没有配置 DeepSeek API Key，请到设置页填写', retryable: false },
+      });
+      return;
+    }
+
+    const cues = await qaCues(tabId, payload);
+    if (controller.signal.aborted) {
+      postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
+      return;
+    }
+
+    const prompt = buildQaPrompt({
+      title: payload.title,
+      partTitle: payload.partTitle,
+      pageCount: payload.pageCount,
+      duration: payload.duration,
+      at: payload.at,
+      question: payload.question,
+      cues,
+      windowSec: settings.contextWindowSec,
+      maxInputTokens: 3500,
+      historyTurns: 0,
+    });
+
+    postToPort(port, {
+      v: 1,
+      type: 'qa:start',
+      requestId,
+      model: settings.textModel,
+      window: prompt.window,
+    });
+
+    if (controller.signal.aborted) {
+      postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
+      return;
+    }
+
+    const startedAt = Date.now();
+    const result = await callDeepSeek({
+      apiKey: settings.apiKey,
+      baseUrl: settings.apiBaseUrl,
+      model: settings.textModel,
+      messages: prompt.messages,
+      thinking: settings.thinking,
+      maxTokens: settings.maxTokens,
+      temperature: 0.3,
+      signal: controller.signal,
+      onChunk: (kind, chunk) => {
+        if (kind === 'answer') text += chunk;
+        else reasoning += chunk;
+        postToPort(port, { v: 1, type: 'qa:chunk', requestId, kind, text: chunk });
+      },
+    });
+
+    text = result.text;
+    reasoning = result.reasoning;
+    const usage: QaUsage = result.usage;
+
+    if (text.trim() === '') {
+      postToPort(port, {
+        v: 1,
+        type: 'qa:error',
+        requestId,
+        error: { code: 'empty', message: '模型没有返回内容，请重试', retryable: true },
+      });
+      return;
+    }
+
+    postToPort(port, {
+      v: 1,
+      type: 'qa:done',
+      requestId,
+      text,
+      reasoning,
+      citations: extractCitationSeconds(text, payload.duration),
+      usage,
+      finishReason: result.finishReason,
+      elapsedMs: Date.now() - startedAt,
+      // 切片 1 不落库；等 qaStore 落地后这里换成记录 id。
+      recordId: '',
+    });
+  } catch (error) {
+    if (error instanceof QaAbortError) {
+      postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
+    } else if (error instanceof QaError) {
+      postToPort(port, { v: 1, type: 'qa:error', requestId, error: error.info });
+    } else {
+      const info: QaErrorInfo = {
+        code: 'unknown',
+        message: error instanceof Error ? error.message : '未知错误',
+        retryable: true,
+      };
+      postToPort(port, { v: 1, type: 'qa:error', requestId, error: info });
+    }
+  } finally {
+    if (activeByTab.get(tabId) === active) activeByTab.delete(tabId);
+  }
+}
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== QA_PORT_NAME) return;
+  const tabId = port.sender?.tab?.id;
+
+  port.onMessage.addListener(message => {
+    const msg = message as QaClientMessage;
+    if (!msg || msg.v !== 1) return;
+
+    if (msg.type === 'qa:ping') {
+      postToPort(port, { v: 1, type: 'qa:pong', at: Date.now() });
+      return;
+    }
+
+    if (msg.type === 'qa:abort') {
+      const active = tabId !== undefined ? activeByTab.get(tabId) : undefined;
+      if (active && active.requestId === msg.requestId) {
+        active.reason = 'user';
+        active.controller.abort();
+      }
+      return;
+    }
+
+    if (msg.type === 'qa:ask') {
+      const payload = msg.payload;
+      if (!payload || typeof payload.question !== 'string' || payload.question.trim() === '') {
+        postToPort(port, {
+          v: 1,
+          type: 'qa:error',
+          requestId: msg.requestId,
+          error: { code: 'bad-request', message: '问题不能为空', retryable: false },
+        });
+        return;
+      }
+      void runQa(port, msg.requestId, payload);
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    const active = tabId !== undefined ? activeByTab.get(tabId) : undefined;
+    if (active) {
+      active.reason = 'tab-closed';
+      active.controller.abort();
+    }
+    void chrome.runtime.lastError;
+  });
+});
 
 chrome.runtime.onInstalled.addListener(() => log('installed'));
 
