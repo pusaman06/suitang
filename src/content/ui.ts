@@ -1,5 +1,10 @@
 import styleText from './ui.css?inline';
-import { renderAnswerHtml } from '../shared/citations';
+import { formatTimestamp, renderAnswerHtml } from '../shared/citations';
+import {
+  type Outline,
+  type OutlineGenerateResponse,
+  type OutlineGetResponse,
+} from '../shared/outline';
 import { QA_PORT_NAME, type QaAskPayload, type QaRect, type QaServerMessage, type QaViewport, type QaWindowInfo } from '../shared/qa';
 import { loadSettings, type Settings } from '../shared/settings';
 import type { VideoInfo } from '../shared/types';
@@ -32,6 +37,27 @@ export function mountUi(info: VideoInfo): UiHandle {
         <div class="vt-part"></div>
         <div class="vt-ids"></div>
       </div>
+      <section class="vt-outline">
+        <button class="vt-outline-head" type="button" aria-expanded="true">
+          <span class="vt-outline-title">大纲</span>
+          <span class="vt-outline-caret">▾</span>
+          <span class="vt-outline-state">未生成</span>
+        </button>
+        <div class="vt-outline-body">
+          <div class="vt-outline-empty">
+            <div class="vt-outline-empty-text">生成一份大纲，快速了解视频结构。</div>
+            <div class="vt-outline-actions">
+              <button class="vt-outline-generate" type="button">生成大纲</button>
+              <span class="vt-outline-cost">约 5–10 秒</span>
+            </div>
+          </div>
+          <ol class="vt-outline-list" hidden></ol>
+          <div class="vt-outline-error" hidden>
+            <span class="vt-outline-error-text"></span>
+            <button class="vt-retry vt-outline-retry" type="button">重试</button>
+          </div>
+        </div>
+      </section>
       <div class="vt-status">就绪</div>
       <div class="vt-answers"></div>
       <div class="vt-frame-hint" hidden></div>
@@ -49,6 +75,16 @@ export function mountUi(info: VideoInfo): UiHandle {
   const course = must<HTMLElement>(shadow, '.vt-course');
   const part = must<HTMLElement>(shadow, '.vt-part');
   const ids = must<HTMLElement>(shadow, '.vt-ids');
+  const outlineHead = must<HTMLButtonElement>(shadow, '.vt-outline-head');
+  const outlineState = must<HTMLElement>(shadow, '.vt-outline-state');
+  const outlineBody = must<HTMLElement>(shadow, '.vt-outline-body');
+  const outlineEmpty = must<HTMLElement>(shadow, '.vt-outline-empty');
+  const outlineEmptyText = must<HTMLElement>(shadow, '.vt-outline-empty-text');
+  const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
+  const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
+  const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
+  const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
+  const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const status = must<HTMLElement>(shadow, '.vt-status');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
@@ -67,23 +103,41 @@ export function mountUi(info: VideoInfo): UiHandle {
   let capturing = false;
   let captureTimer = 0;
 
+  const OUTLINE_EMPTY_TEXT = '生成一份大纲，快速了解视频结构。';
+  let outline: Outline | null = null;
+  let outlineKey = outlineInfoKey(info);
+  let outlineExpanded = true;
+  let outlineGenerating = false;
+  let outlineGetToken = 0;
+  let outlineActiveIndex = -1;
+  let outlineRetryAction: (() => void) | null = null;
+  let lastOutlineTimeupdate = 0;
+
   void loadSettings().then(next => {
     settings = next;
     if (activeRequestId === '') status.textContent = next.apiKey ? '就绪' : '未配置 API Key';
   });
 
   const render = (next: VideoInfo) => {
+    const nextKey = outlineInfoKey(next);
+    const changed = nextKey !== outlineKey;
     currentInfo = next;
+    outlineKey = nextKey;
     course.textContent = next.title;
     const pageLabel = next.pageCount ? `P${next.p} / ${next.pageCount}` : `P${next.p}`;
     part.textContent = `${pageLabel}${next.partTitle ? ` · ${next.partTitle}` : ''}`;
     ids.textContent = `${next.bvid}${next.cid ? ` · cid ${next.cid}` : ''}`;
+    if (changed) resetOutline();
   };
   render(info);
 
   const toggle = () => {
     panel.hidden = !panel.hidden;
-    if (!panel.hidden) input.focus();
+    if (!panel.hidden) {
+      input.focus();
+      // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
+      void loadOutline();
+    }
   };
 
   ball.addEventListener('click', toggle);
@@ -129,6 +183,249 @@ export function mountUi(info: VideoInfo): UiHandle {
   document.addEventListener('pause', onPlayPause, true);
   syncPaused();
   const initialSync = window.setTimeout(syncPaused, 1200);
+
+  /* -------- D5 大纲 -------- */
+
+  function outlineInfoKey(next: VideoInfo): string {
+    return `${next.bvid}:${next.p}:${next.cid ?? 'nocid'}`;
+  }
+
+  function setOutlineExpanded(open: boolean): void {
+    outlineExpanded = open;
+    outlineBody.hidden = !open;
+    outlineHead.setAttribute('aria-expanded', String(open));
+  }
+
+  function renderOutlineState(): void {
+    if (outlineGenerating) {
+      outlineState.textContent = '生成中…';
+    } else if (!outlineError.hidden) {
+      outlineState.textContent = '失败';
+    } else if (outline) {
+      outlineState.textContent = `${outline.segments.length} 段`;
+    } else {
+      outlineState.textContent = '未生成';
+    }
+    outlineGenerate.disabled = outlineGenerating;
+    outlineGenerate.textContent = outlineGenerating ? '生成中…' : '生成大纲';
+  }
+
+  function setOutlineActive(index: number): void {
+    if (index === outlineActiveIndex) return;
+    outlineActiveIndex = index;
+    outlineList.querySelectorAll<HTMLElement>('.vt-outline-item').forEach((item, itemIndex) => {
+      const active = itemIndex === index;
+      item.classList.toggle('vt-outline-active', active);
+      if (active) item.setAttribute('aria-current', 'true');
+      else item.removeAttribute('aria-current');
+    });
+  }
+
+  function applyOutlineActive(): void {
+    const segments = outline?.segments ?? [];
+    if (segments.length === 0) {
+      setOutlineActive(-1);
+      return;
+    }
+    const at = getPlaybackTime();
+    let index = segments.findIndex(segment => at >= segment.start && at < segment.end);
+    if (index < 0 && at >= segments[segments.length - 1].end) index = segments.length - 1;
+    setOutlineActive(index);
+  }
+
+  function renderOutlineList(): void {
+    outlineList.replaceChildren();
+    outlineActiveIndex = -1;
+    if (!outline || outline.segments.length === 0) {
+      outlineList.hidden = true;
+      return;
+    }
+    outline.segments.forEach((segment, index) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'vt-outline-item';
+      button.dataset.index = String(index);
+      button.dataset.start = String(segment.start);
+      button.dataset.end = String(segment.end);
+      const time = document.createElement('span');
+      time.className = 'vt-outline-time';
+      time.textContent = formatTimestamp(segment.start);
+      const name = document.createElement('span');
+      name.className = 'vt-outline-name';
+      name.textContent = segment.title;
+      button.append(time, name);
+      item.append(button);
+      outlineList.append(item);
+    });
+    outlineList.hidden = false;
+    applyOutlineActive();
+  }
+
+  function renderOutline(): void {
+    outlineGenerate.disabled = outlineGenerating;
+    outlineGenerate.textContent = outlineGenerating ? '生成中…' : '生成大纲';
+    if (outline) {
+      outlineEmpty.hidden = true;
+      outlineError.hidden = true;
+      renderOutlineList();
+    } else {
+      outlineList.hidden = true;
+      outlineList.replaceChildren();
+      outlineActiveIndex = -1;
+      outlineEmpty.hidden = !outlineError.hidden;
+    }
+    renderOutlineState();
+  }
+
+  function setOutlineError(message: string, retry: () => void): void {
+    outlineEmpty.hidden = true;
+    outlineList.hidden = true;
+    outlineError.hidden = false;
+    outlineErrorText.textContent = message;
+    outlineRetryAction = retry;
+    renderOutlineState();
+  }
+
+  function clearOutlineError(): void {
+    outlineError.hidden = true;
+    outlineErrorText.textContent = '';
+    outlineRetryAction = null;
+  }
+
+  function resetOutline(): void {
+    outline = null;
+    outlineGenerating = false;
+    outlineGetToken += 1;
+    outlineActiveIndex = -1;
+    outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
+    outlineList.replaceChildren();
+    outlineList.hidden = true;
+    outlineEmpty.hidden = false;
+    clearOutlineError();
+    renderOutlineState();
+    if (!panel.hidden) void loadOutline();
+  }
+
+  async function loadOutline(): Promise<void> {
+    const requested = currentInfo;
+    const key = outlineInfoKey(requested);
+    const token = ++outlineGetToken;
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'outline:get',
+        bvid: requested.bvid,
+        p: requested.p,
+        cid: requested.cid,
+        duration: requested.duration ?? 0,
+      })) as OutlineGetResponse | undefined;
+      if (token !== outlineGetToken || outlineInfoKey(currentInfo) !== key) return;
+      if (!response) throw new Error('读取大纲失败');
+      if (!response.ok) throw new Error(response.message || '读取大纲失败');
+      if (outlineGenerating) return;
+      outline = response.outline;
+      clearOutlineError();
+      outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
+      renderOutline();
+    } catch (error) {
+      if (token !== outlineGetToken || outlineInfoKey(currentInfo) !== key) return;
+      if (outlineGenerating) return;
+      setOutlineError(
+        `读取大纲失败：${error instanceof Error ? error.message : String(error)}`,
+        () => void loadOutline(),
+      );
+    }
+  }
+
+  async function generateOutline(): Promise<void> {
+    if (outlineGenerating) return;
+    const requested = currentInfo;
+    const key = outlineInfoKey(requested);
+    if (!requested.duration || requested.duration <= 0) {
+      setOutlineError('还不知道视频时长，暂时不能生成大纲。', () => void generateOutline());
+      return;
+    }
+
+    outlineGenerating = true;
+    clearOutlineError();
+    outlineEmpty.hidden = false;
+    outlineEmptyText.textContent = '正在生成大纲，请稍候…';
+    renderOutlineState();
+
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'outline:generate',
+        bvid: requested.bvid,
+        p: requested.p,
+        cid: requested.cid,
+        title: requested.title,
+        duration: requested.duration,
+      })) as OutlineGenerateResponse | undefined;
+      if (outlineInfoKey(currentInfo) !== key) return;
+      outlineGenerating = false;
+      if (!response) {
+        setOutlineError('大纲生成失败，请重试', () => void generateOutline());
+        return;
+      }
+      if (!response.ok) {
+        setOutlineError(response.message || '大纲生成失败，请重试', () => void generateOutline());
+        return;
+      }
+      outline = response.outline;
+      clearOutlineError();
+      outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
+      renderOutline();
+    } catch (error) {
+      if (outlineInfoKey(currentInfo) !== key) return;
+      outlineGenerating = false;
+      setOutlineError(
+        `大纲生成失败：${error instanceof Error ? error.message : String(error)}`,
+        () => void generateOutline(),
+      );
+    }
+  }
+
+  function jumpToOutlineSegment(index: number): void {
+    const segment = outline?.segments[index];
+    if (!segment) return;
+    const video = getVideoElement();
+    // 大纲用于预习/跳转，默认不因为点击而开始播放；jumpAutoPlay 显式打开时才播。
+    if (video && !video.paused) video.pause();
+    seekVideo(segment.start, { autoPlay: settings?.jumpAutoPlay === true });
+    setOutlineActive(index);
+  }
+
+  outlineHead.addEventListener('click', () => setOutlineExpanded(!outlineExpanded));
+  outlineGenerate.addEventListener('click', () => void generateOutline());
+  outlineRetry.addEventListener('click', () => {
+    const retry = outlineRetryAction;
+    outlineRetryAction = null;
+    retry?.();
+  });
+  outlineList.addEventListener('click', event => {
+    const item = (event.target as HTMLElement | null)?.closest<HTMLElement>('.vt-outline-item');
+    if (!item) return;
+    const index = Number(item.dataset.index);
+    if (Number.isInteger(index) && index >= 0) jumpToOutlineSegment(index);
+  });
+
+  const onOutlineTimeupdate = (event: Event) => {
+    if (!(event.target instanceof HTMLVideoElement)) return;
+    const now = Date.now();
+    if (now - lastOutlineTimeupdate < 1000) return;
+    lastOutlineTimeupdate = now;
+    applyOutlineActive();
+  };
+  const onOutlineSeeked = (event: Event) => {
+    if (!(event.target instanceof HTMLVideoElement)) return;
+    lastOutlineTimeupdate = 0;
+    applyOutlineActive();
+  };
+  document.addEventListener('timeupdate', onOutlineTimeupdate, true);
+  document.addEventListener('seeked', onOutlineSeeked, true);
+
+  setOutlineExpanded(true);
+  renderOutline();
 
   /* -------- 问答 -------- */
 
@@ -394,6 +691,8 @@ export function mountUi(info: VideoInfo): UiHandle {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('play', onPlayPause, true);
       document.removeEventListener('pause', onPlayPause, true);
+      document.removeEventListener('timeupdate', onOutlineTimeupdate, true);
+      document.removeEventListener('seeked', onOutlineSeeked, true);
       window.clearTimeout(initialSync);
       if (captureTimer !== 0) window.clearTimeout(captureTimer);
       if (paintTimer !== 0) window.clearTimeout(paintTimer);

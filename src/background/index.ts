@@ -8,6 +8,15 @@ import type {
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
 import { loadSettings } from '../shared/settings';
 import { buildQaPrompt } from '../shared/prompt';
+import { buildOutlinePrompt } from '../shared/outline-prompt';
+import {
+  outlineStorageKey,
+  parseOutline,
+  type Outline,
+  type OutlineErrorCode,
+  type OutlineGenerateResponse,
+  type OutlineGetResponse,
+} from '../shared/outline';
 import { extractCitationSeconds } from '../shared/citations';
 import {
   QA_PORT_NAME,
@@ -355,6 +364,156 @@ async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue
   return readCache();
 }
 
+/* ------------------------- D5：大纲 ------------------------- */
+
+interface OutlineRequest {
+  bvid: string;
+  p: number;
+  cid?: number;
+  title: string;
+  duration: number;
+}
+
+class OutlineFailure extends Error {
+  constructor(
+    readonly code: OutlineErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'OutlineFailure';
+  }
+}
+
+/** 同一 tab 同一 bvid+p 的进行中任务，重复点击复用同一个 Promise。 */
+const outlineJobs = new Map<string, Promise<OutlineGenerateResponse>>();
+
+async function readOutline(bvid: string, p: number, cid?: number): Promise<Outline | null> {
+  const key = outlineStorageKey(bvid, p, cid);
+  const stored = await chrome.storage.local.get(key);
+  const value = stored[key] as Outline | undefined;
+  if (!value || !Array.isArray(value.segments) || value.segments.length === 0) return null;
+  if (value.bvid !== bvid || value.p !== p) return null;
+  if (!Number.isFinite(value.duration) || value.duration <= 0) return null;
+  const valid = value.segments.every(
+    segment =>
+      Number.isFinite(segment.start) &&
+      Number.isFinite(segment.end) &&
+      segment.start >= 0 &&
+      segment.end > segment.start &&
+      typeof segment.title === 'string' &&
+      segment.title.trim() !== '',
+  );
+  return valid ? value : null;
+}
+
+/** 复用 D2 的字幕缓存；缓存没有时走 loadSubtitles，读完整 cues 而不是只给前 10 条。 */
+async function outlineCues(tabId: number, request: OutlineRequest): Promise<SubtitleCue[]> {
+  const cacheKey = request.cid ? `sub:${request.bvid}:${request.p}:${request.cid}` : '';
+  const readCache = async (): Promise<SubtitleCue[]> => {
+    if (!cacheKey) return [];
+    const stored = await chrome.storage.local.get(cacheKey);
+    return (stored[cacheKey] as SubtitleCache | undefined)?.cues ?? [];
+  };
+
+  const cached = await readCache();
+  if (cached.length > 0) return cached;
+  if (!request.cid) return [];
+
+  const meta = await readVideoMeta(tabId);
+  if (!meta?.aid) return [];
+  const result = await loadSubtitles(tabId, {
+    bvid: request.bvid,
+    aid: meta.aid,
+    cid: request.cid,
+    p: request.p,
+    duration: request.duration,
+  });
+  if (!result.ok) throw new OutlineFailure('no-subtitle', result.error ?? '该视频没有字幕');
+  return readCache();
+}
+
+function outlineError(error: unknown): OutlineGenerateResponse {
+  if (error instanceof OutlineFailure) {
+    return { ok: false, code: error.code, message: error.message };
+  }
+  if (error instanceof QaError) {
+    const info = error.info;
+    const network =
+      info.code === 'network' ||
+      info.code === 'server' ||
+      info.code === 'rate-limit' ||
+      info.code === 'timeout';
+    return { ok: false, code: network ? 'network' : 'unknown', message: info.message };
+  }
+  if (error instanceof QaAbortError) {
+    return { ok: false, code: 'unknown', message: '大纲生成已取消' };
+  }
+  log('outline generate failed', error);
+  return {
+    ok: false,
+    code: 'unknown',
+    message: error instanceof Error ? error.message : '大纲生成失败',
+  };
+}
+
+async function generateOutline(
+  tabId: number,
+  request: OutlineRequest,
+): Promise<OutlineGenerateResponse> {
+  try {
+    const settings = await loadSettings();
+    if (!settings.apiKey.trim()) {
+      throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
+    }
+
+    const cues = await outlineCues(tabId, request);
+    const prompt = buildOutlinePrompt({
+      title: request.title,
+      duration: request.duration,
+      cues,
+    });
+    if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
+
+    let text = '';
+    const result = await callDeepSeek({
+      apiKey: settings.apiKey,
+      baseUrl: settings.apiBaseUrl,
+      model: settings.textModel,
+      messages: prompt.messages,
+      thinking: false,
+      maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
+      temperature: 0.2,
+      onChunk: (kind, chunk) => {
+        if (kind === 'answer') text += chunk;
+      },
+    });
+
+    const raw = text.trim() !== '' ? text : result.text;
+    if (raw.trim() === '') {
+      throw new OutlineFailure('empty', '模型没有返回内容，请重试');
+    }
+
+    const segments = parseOutline(raw, request.duration, prompt.range);
+    if (!segments) {
+      throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+    }
+
+    const outline: Outline = {
+      bvid: request.bvid,
+      p: request.p,
+      cid: request.cid,
+      duration: request.duration,
+      segments,
+      createdAt: Date.now(),
+      model: settings.textModel,
+    };
+    await chrome.storage.local.set({ [outlineStorageKey(request.bvid, request.p, request.cid)]: outline });
+    return { ok: true, outline };
+  } catch (error) {
+    return outlineError(error);
+  }
+}
+
 async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAskPayload): Promise<void> {
   const tabId = port.sender?.tab?.id;
   if (tabId === undefined) {
@@ -629,6 +788,90 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(error =>
         sendResponse({ ok: false, error: String(error) } satisfies SubtitleResult),
       );
+    return true;
+  }
+
+  if (message?.type === 'outline:get') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p =
+      typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    const cid =
+      typeof message.cid === 'number' && message.cid > 0
+        ? message.cid
+        : undefined;
+    if (!bvid || !p) {
+      sendResponse({
+        ok: false,
+        code: 'unknown',
+        message: '缺少 bvid/p',
+      } satisfies OutlineGetResponse);
+      return false;
+    }
+    void readOutline(bvid, p, cid)
+      .then(outline => sendResponse({ ok: true, outline } satisfies OutlineGetResponse))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          code: 'unknown',
+          message: error instanceof Error ? error.message : '读取大纲失败',
+        } satisfies OutlineGetResponse),
+      );
+    return true;
+  }
+
+  if (message?.type === 'outline:generate') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p =
+      typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    const cid =
+      typeof message.cid === 'number' && message.cid > 0
+        ? message.cid
+        : undefined;
+    const title = typeof message.title === 'string' ? message.title.trim() : '';
+    const duration =
+      typeof message.duration === 'number' && Number.isFinite(message.duration)
+        ? message.duration
+        : 0;
+    const tabId =
+      typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
+    if (!bvid || !p || !title || duration <= 0) {
+      sendResponse({
+        ok: false,
+        code: 'unknown',
+        message: '缺少 bvid/p/title/duration',
+      } satisfies OutlineGenerateResponse);
+      return false;
+    }
+    if (tabId === undefined) {
+      sendResponse({
+        ok: false,
+        code: 'unknown',
+        message: '找不到当前标签页',
+      } satisfies OutlineGenerateResponse);
+      return false;
+    }
+
+    const request: OutlineRequest = { bvid, p, cid, title, duration };
+    const jobKey = `${tabId}:${bvid}:${p}`;
+    let job = outlineJobs.get(jobKey);
+    if (!job) {
+      job = generateOutline(tabId, request);
+      outlineJobs.set(jobKey, job);
+    }
+    const pending = job;
+    void pending
+      .then(response => {
+        if (outlineJobs.get(jobKey) === pending) outlineJobs.delete(jobKey);
+        sendResponse(response);
+      })
+      .catch(error => {
+        if (outlineJobs.get(jobKey) === pending) outlineJobs.delete(jobKey);
+        sendResponse({
+          ok: false,
+          code: 'unknown',
+          message: error instanceof Error ? error.message : '大纲生成失败',
+        } satisfies OutlineGenerateResponse);
+      });
     return true;
   }
 

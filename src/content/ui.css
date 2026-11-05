@@ -112,6 +112,169 @@
   font-family: ui-monospace, Consolas, monospace;
 }
 
+/* D5 大纲：紧凑折叠区，放在视频信息与问答状态之间。 */
+.vt-outline {
+  margin-top: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  background: #181c28;
+  overflow: hidden;
+}
+
+.vt-outline-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 11px;
+  border: 0;
+  background: transparent;
+  color: #e8ebf4;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-outline-head:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.vt-outline-title {
+  font-weight: 600;
+}
+
+.vt-outline-caret {
+  color: #8b93a8;
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.vt-outline-head[aria-expanded="false"] .vt-outline-caret {
+  transform: rotate(-90deg);
+}
+
+.vt-outline-state {
+  margin-left: auto;
+  color: #8b93a8;
+  font-size: 11px;
+}
+
+.vt-outline-body {
+  padding: 0 11px 10px;
+}
+
+.vt-outline-body[hidden],
+.vt-outline-list[hidden],
+.vt-outline-error[hidden] {
+  display: none;
+}
+
+.vt-outline-empty-text {
+  margin: 2px 0 8px;
+  color: #8b93a8;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.vt-outline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vt-outline-generate {
+  padding: 4px 12px;
+  border: 1px solid rgba(126, 162, 255, 0.35);
+  border-radius: 7px;
+  background: rgba(79, 124, 255, 0.16);
+  color: #c7d6ff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vt-outline-generate:hover {
+  background: rgba(79, 124, 255, 0.26);
+}
+
+.vt-outline-generate:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.vt-outline-cost {
+  color: #6f7891;
+  font-size: 10.5px;
+}
+
+.vt-outline-list {
+  display: grid;
+  gap: 2px;
+  max-height: 190px;
+  margin: 4px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.vt-outline-item {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 7px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #cfd6e8;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-outline-item:hover {
+  background: #232838;
+  color: #fff;
+}
+
+.vt-outline-item.vt-outline-active {
+  background: rgba(79, 124, 255, 0.18);
+  color: #e2e9ff;
+}
+
+.vt-outline-time {
+  color: #7ea2ff;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+}
+
+.vt-outline-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vt-outline-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #ffb4b4;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.vt-outline-error-text {
+  flex: 1;
+}
+
+.vt-outline-retry {
+  flex: none;
+  margin-left: 0;
+}
+
 .vt-status {
   margin: 9px 0 6px;
   color: #8b93a8;

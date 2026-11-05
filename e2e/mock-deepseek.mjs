@@ -7,13 +7,38 @@ import http from 'node:http';
 export const DEFAULT_ANSWER =
   '结论：这段在讲变量赋值 [00:12]。\n补充：没有更多内容。\n测试全文结束。';
 
+// 9 段，覆盖到 900s；parseOutline 会按时长 clamp 末段。
+export const DEFAULT_OUTLINE_ANSWER = JSON.stringify([
+  { start: 0, end: 100, title: '课程介绍与学习路线' },
+  { start: 100, end: 200, title: '开发环境与工具准备' },
+  { start: 200, end: 300, title: 'Python 基础语法概览' },
+  { start: 300, end: 400, title: '变量与数据类型讲解' },
+  { start: 400, end: 500, title: '条件判断与循环结构' },
+  { start: 500, end: 600, title: '函数定义与参数使用' },
+  { start: 600, end: 700, title: '实战项目结构说明' },
+  { start: 700, end: 800, title: '调试与常见错误排查' },
+  { start: 800, end: 900, title: '总结与后续学习建议' },
+]);
+
+function isOutlineRequest(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  return messages.some(
+    message => typeof message?.content === 'string' && message.content.includes('课程笔记助手'),
+  );
+}
+
 function sseChunk(payload) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
 export function createMockServer() {
-  /** @type {{ status: number, answer: string, delayMs: number }} */
-  const state = { status: 200, answer: DEFAULT_ANSWER, delayMs: 80 };
+  /** @type {{ status: number, answer: string, outlineAnswer: string, delayMs: number }} */
+  const state = {
+    status: 200,
+    answer: DEFAULT_ANSWER,
+    outlineAnswer: DEFAULT_OUTLINE_ANSWER,
+    delayMs: 80,
+  };
   /** @type {Array<{ method: string, url: string, headers: Record<string, string>, body: any }>} */
   const requests = [];
 
@@ -56,7 +81,7 @@ export function createMockServer() {
       });
 
       const pieces = [];
-      let rest = state.answer;
+      let rest = isOutlineRequest(body) ? state.outlineAnswer : state.answer;
       // 切成 6 字左右的小片，模拟逐字返回。
       while (rest.length > 0) {
         pieces.push(rest.slice(0, 6));
@@ -108,6 +133,7 @@ export function createMockServer() {
       requests.length = 0;
       state.status = 200;
       state.answer = DEFAULT_ANSWER;
+      state.outlineAnswer = DEFAULT_OUTLINE_ANSWER;
       state.delayMs = 80;
     },
   };
