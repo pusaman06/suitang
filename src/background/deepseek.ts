@@ -6,7 +6,9 @@
 import type { ChatMessage, QaErrorInfo, QaUsage } from '../shared/qa';
 import { EMPTY_USAGE } from '../shared/qa';
 
-export const DEEPSEEK_TIMEOUT_MS = 60_000;
+/** 连接 + 整体上限；空闲上限在每次收到字节时重置。 */
+export const DEEPSEEK_TOTAL_TIMEOUT_MS = 180_000;
+export const DEEPSEEK_IDLE_TIMEOUT_MS = 45_000;
 
 export class QaError extends Error {
   readonly info: QaErrorInfo;
@@ -67,6 +69,15 @@ function numberField(source: Record<string, unknown> | null | undefined, key: st
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/** 字段不存在时返回 undefined，方便做「顶层优先、details 兜底」的链式读取。 */
+function optionalNumber(
+  source: Record<string, unknown> | null | undefined,
+  key: string,
+): number | undefined {
+  const value = source?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function readUsage(raw: unknown): QaUsage | null {
   const usage = asRecord(raw);
   if (!usage) return null;
@@ -76,8 +87,12 @@ function readUsage(raw: unknown): QaUsage | null {
     promptTokens: numberField(usage, 'prompt_tokens'),
     completionTokens: numberField(usage, 'completion_tokens'),
     totalTokens: numberField(usage, 'total_tokens'),
-    cacheHitTokens: numberField(promptDetails, 'prompt_cache_hit_tokens'),
-    cacheMissTokens: numberField(promptDetails, 'prompt_cache_miss_tokens'),
+    // 官方文档：cache 命中/未命中在 usage 顶层；prompt_tokens_details 里是等义的 cached_tokens。
+    cacheHitTokens:
+      optionalNumber(usage, 'prompt_cache_hit_tokens') ??
+      optionalNumber(promptDetails, 'cached_tokens') ??
+      0,
+    cacheMissTokens: optionalNumber(usage, 'prompt_cache_miss_tokens') ?? 0,
     reasoningTokens: numberField(completionDetails, 'reasoning_tokens'),
   };
 }
@@ -133,6 +148,7 @@ async function streamOnce(
   request: DeepSeekRequest,
   includeUsage: boolean,
   controller: AbortController,
+  touch: () => void,
 ): Promise<DeepSeekResult> {
   const url = `${request.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   let response: Response;
@@ -173,6 +189,8 @@ async function streamOnce(
   if (!response.body) {
     throw new QaError({ code: 'network', message: '响应没有可读的流', retryable: true });
   }
+  // 响应头到达也算有动静，重置空闲计时（连接阶段不单独设超时）。
+  touch();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -231,6 +249,7 @@ async function streamOnce(
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
+    touch();
     buffer += decoder.decode(value, { stream: true });
     // SSE 事件以空行分隔，但逐行处理更宽容（有的代理只发 \n）。
     let newline = buffer.indexOf('\n');
@@ -254,11 +273,24 @@ async function streamOnce(
 
 export async function callDeepSeek(request: DeepSeekRequest): Promise<DeepSeekResult> {
   const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
+  let timeoutKind: 'idle' | 'total' | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // 空闲计时：收到任意字节（含响应头）就重置；连接阶段也受它保护。
+  const touch = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (timeoutKind === null) timeoutKind = 'idle';
+      controller.abort();
+    }, DEEPSEEK_IDLE_TIMEOUT_MS);
+  };
+  touch();
+
+  const totalTimer = setTimeout(() => {
+    if (timeoutKind === null) timeoutKind = 'total';
     controller.abort();
-  }, DEEPSEEK_TIMEOUT_MS);
+  }, DEEPSEEK_TOTAL_TIMEOUT_MS);
+
   const external = request.signal;
   const forwardAbort = () => controller.abort();
   if (external) {
@@ -268,17 +300,20 @@ export async function callDeepSeek(request: DeepSeekRequest): Promise<DeepSeekRe
 
   try {
     try {
-      return await streamOnce(request, true, controller);
+      return await streamOnce(request, true, controller, touch);
     } catch (error) {
       if (error instanceof QaError && error.info.status === 400 && /stream_options/i.test(error.info.detail ?? '')) {
         // 某些代理不认 stream_options，去掉重试一次。
-        return await streamOnce(request, false, controller);
+        return await streamOnce(request, false, controller, touch);
       }
       throw error;
     }
   } catch (error) {
-    if (timedOut) {
-      throw new QaError({ code: 'timeout', message: '超过 60 秒没有完成，请重试', retryable: true });
+    if (timeoutKind === 'idle') {
+      throw new QaError({ code: 'timeout', message: '45 秒没有收到新内容，请重试', retryable: true });
+    }
+    if (timeoutKind === 'total') {
+      throw new QaError({ code: 'timeout', message: '超过 180 秒没有完成，请重试', retryable: true });
     }
     if (external?.aborted) throw new QaAbortError('user');
     if (controller.signal.aborted) throw new QaAbortError('aborted');
@@ -289,7 +324,8 @@ export async function callDeepSeek(request: DeepSeekRequest): Promise<DeepSeekRe
       retryable: true,
     });
   } finally {
-    clearTimeout(timer);
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    clearTimeout(totalTimer);
     external?.removeEventListener('abort', forwardAbort);
   }
 }
