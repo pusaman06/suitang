@@ -20,6 +20,8 @@ export interface Settings {
   contextWindowSec: number;
   /** 点时间戳跳转后是否自动播放；false 表示保持暂停。 */
   jumpAutoPlay: boolean;
+  /** 提问时是否附带当前视频画面截图。 */
+  frameEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxTokens: 2048,
   contextWindowSec: 90,
   jumpAutoPlay: false,
+  frameEnabled: true,
 };
 
 /** 旧版本存过退役别名，读出来时归一到现役模型。 */
@@ -69,6 +72,8 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
     maxTokens: clampInt(saved.maxTokens, DEFAULT_SETTINGS.maxTokens, 256, 8192),
     contextWindowSec: clampInt(saved.contextWindowSec, DEFAULT_SETTINGS.contextWindowSec, 30, 300),
     jumpAutoPlay: typeof saved.jumpAutoPlay === 'boolean' ? saved.jumpAutoPlay : DEFAULT_SETTINGS.jumpAutoPlay,
+    // D4 新增：旧存档没有这个字段时按默认开启处理。
+    frameEnabled: typeof saved.frameEnabled === 'boolean' ? saved.frameEnabled : DEFAULT_SETTINGS.frameEnabled,
   };
 }
 

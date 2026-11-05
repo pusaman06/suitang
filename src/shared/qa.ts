@@ -7,6 +7,30 @@ export const QA_PORT_NAME = 'vt-qa';
 export const QA_PROTOCOL_VERSION = 1;
 /** thinking 关闭时的采样温度；thinking 模式下服务端会忽略它。 */
 export const QA_TEMPERATURE = 0.3;
+/** 视频可见面积 / 视频面积低于该值就不带画面，避免截到半张图。 */
+export const QA_MIN_VISIBLE_RATIO = 0.5;
+
+/** 暂停帧：由 background 截图并裁剪后用于请求；content 只负责给出裁剪区域。 */
+export interface QaFrame {
+  /** data:image/jpeg;base64,... */
+  dataUrl: string;
+  width: number;
+  height: number;
+  /** 截图瞬间的视频时间（秒）。 */
+  at: number;
+}
+
+export interface QaRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface QaViewport {
+  width: number;
+  height: number;
+}
 
 export interface QaAskPayload {
   bvid: string;
@@ -20,6 +44,12 @@ export interface QaAskPayload {
   /** 提问瞬间的视频时间（秒）。 */
   at: number;
   question: string;
+  /** 视频可见区域（CSS 像素，已与视口求交）；不传表示这次不带画面。 */
+  rect?: QaRect;
+  /** 截图时的 window.innerWidth / innerHeight。 */
+  viewport?: QaViewport;
+  /** 预留：content 通常不填（截图在 background 完成）；填了就直接用这张图。 */
+  frame?: QaFrame;
 }
 
 export type QaClientMessage =
@@ -54,6 +84,10 @@ export interface QaWindowInfo {
   estimatedInputTokens: number;
   truncated: boolean;
   noSubtitle: boolean;
+  /** 本次请求是否真的带上了画面截图。 */
+  hasFrame: boolean;
+  /** 请求了截图但失败时的原因；成功或未请求时为空。 */
+  frameError?: string;
 }
 
 export type QaErrorCode =

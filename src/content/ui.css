@@ -1,4 +1,4 @@
-﻿:host {
+:host {
   all: initial;
 }
 
@@ -25,6 +25,22 @@
 .vt-ball:hover {
   transform: scale(1.06);
   box-shadow: 0 10px 28px rgba(24, 39, 95, 0.45);
+}
+
+/* 视频暂停：轻脉冲提示这一帧可以问，但不自动弹面板。 */
+.vt-ball-paused {
+  border-color: rgba(126, 162, 255, 0.9);
+  animation: vt-ball-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes vt-ball-pulse {
+  0%,
+  100% {
+    box-shadow: 0 8px 24px rgba(24, 39, 95, 0.35), 0 0 0 0 rgba(126, 162, 255, 0.55);
+  }
+  50% {
+    box-shadow: 0 8px 24px rgba(24, 39, 95, 0.35), 0 0 0 10px rgba(126, 162, 255, 0);
+  }
 }
 
 .vt-panel {
@@ -207,6 +223,16 @@
   margin-top: 4px;
   color: #6f7891;
   font-size: 11px;
+}
+
+.vt-frame-hint {
+  margin-top: 8px;
+  color: #8b93a8;
+  font-size: 11.5px;
+}
+
+.vt-frame-hint[hidden] {
+  display: none;
 }
 
 .vt-composer {

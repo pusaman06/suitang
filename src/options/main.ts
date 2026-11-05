@@ -6,6 +6,7 @@ const apiKey = el<HTMLInputElement>('#api-key');
 const visionModel = el<HTMLInputElement>('#vision-model');
 const textModel = el<HTMLInputElement>('#text-model');
 const thinking = el<HTMLInputElement>('#thinking');
+const frameEnabled = el<HTMLInputElement>('#frame-enabled');
 const contextWindow = el<HTMLInputElement>('#context-window');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
 const save = el<HTMLButtonElement>('#save');
@@ -26,6 +27,7 @@ async function init(): Promise<void> {
   visionModel.value = settings.visionModel;
   textModel.value = settings.textModel;
   thinking.checked = settings.thinking;
+  frameEnabled.checked = settings.frameEnabled;
   contextWindow.value = String(settings.contextWindowSec);
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
 }
@@ -36,6 +38,7 @@ save.addEventListener('click', () => {
     visionModel: visionModel.value.trim() || DEFAULT_SETTINGS.visionModel,
     textModel: textModel.value.trim() || DEFAULT_SETTINGS.textModel,
     thinking: thinking.checked,
+    frameEnabled: frameEnabled.checked,
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
     apiBaseUrl: apiBaseUrl.value.trim(),
   }).then(next => {

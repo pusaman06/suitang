@@ -68,6 +68,8 @@ test('请求体符合协议，回答含可点击 [mm:ss] 且能跳转', async ()
     maxTokens: 2048,
     thinking: false,
     contextWindowSec: 90,
+    // D3 的文本链路测试：显式关掉 D4 画面，保证 content 还是纯字符串。
+    frameEnabled: false,
   });
 
   await openPanel(page, VIDEO_URL);
@@ -157,7 +159,11 @@ test('401 显示鉴权失败文案', async () => {
 
 test('无字幕视频：不编造字幕，仍能回答', async () => {
   await clearStorage(context, extensionId);
-  await writeSettings(context, extensionId, { apiKey: 'sk-e2e-test', apiBaseUrl: baseUrl });
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-test',
+    apiBaseUrl: baseUrl,
+    frameEnabled: false,
+  });
 
   // 该样本有登录态时其实带字幕；把 player/v2 返回的字幕列表清空，稳定复现「无字幕」。
   const stripSubtitles = async (route: Route) => {

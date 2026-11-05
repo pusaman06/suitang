@@ -14,10 +14,12 @@ import {
   type QaAskPayload,
   type QaClientMessage,
   type QaErrorInfo,
+  type QaFrame,
   type QaServerMessage,
   type QaUsage,
 } from '../shared/qa';
 import { callDeepSeek, QaAbortError, QaError } from './deepseek';
+import { captureFrame } from './frame';
 
 const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
 
@@ -389,11 +391,39 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       return;
     }
 
+    // 截图失败（权限/全屏/headless 黑图）不能让整个提问挂掉：降级成纯文本。
+    // 放在字幕加载之前：截图要贴近暂停瞬间，别等几秒字幕拉取完画面已经变了。
+    let frame: QaFrame | undefined;
+    let frameError: string | undefined;
+    if (settings.frameEnabled && payload.rect && payload.viewport) {
+      // content 正常不带图；带了就直接用，省一次截图。
+      frame = payload.frame;
+      if (!frame) {
+        try {
+          frame = await captureFrame(
+            port.sender?.tab?.windowId,
+            payload.rect,
+            payload.viewport,
+            payload.at,
+          );
+        } catch (error) {
+          frameError = error instanceof Error ? error.message : String(error);
+          log('qa frame capture failed', frameError);
+        }
+      }
+      if (controller.signal.aborted) {
+        postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
+        return;
+      }
+    }
+
     const cues = await qaCues(tabId, payload);
     if (controller.signal.aborted) {
       postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
       return;
     }
+
+    const model = frame ? settings.visionModel : settings.textModel;
 
     const prompt = buildQaPrompt({
       title: payload.title,
@@ -406,14 +436,15 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       windowSec: settings.contextWindowSec,
       maxInputTokens: 3500,
       historyTurns: 0,
+      frame: frame ? { dataUrl: frame.dataUrl } : undefined,
     });
 
     postToPort(port, {
       v: 1,
       type: 'qa:start',
       requestId,
-      model: settings.textModel,
-      window: prompt.window,
+      model,
+      window: { ...prompt.window, hasFrame: Boolean(frame), frameError },
     });
 
     if (controller.signal.aborted) {
@@ -425,7 +456,7 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
     const result = await callDeepSeek({
       apiKey: settings.apiKey,
       baseUrl: settings.apiBaseUrl,
-      model: settings.textModel,
+      model,
       messages: prompt.messages,
       thinking: settings.thinking,
       maxTokens: settings.maxTokens,

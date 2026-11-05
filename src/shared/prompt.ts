@@ -19,6 +19,10 @@ export const QA_SYSTEM_PROMPT = `你是视频学习助手。只依据给定的�
 export const QA_NO_SUBTITLE_NOTE =
   '本视频没有可用字幕。只依据视频标题、分 P 标题和当前时间回答；标题里没有的信息直接说「视频里没讲到」，不要编造台词或内容。';
 
+/** 带画面时追加到 system 末尾；用户要求原样保留这段措辞。 */
+export const QA_FRAME_NOTE =
+  '用户附带了当前视频画面截图。画面中的文字可以直接引用；引用画面内容时用「画面中」开头。不要编造画面里没有的内容。';
+
 export interface QaPromptTurn {
   q: string;
   a: string;
@@ -41,6 +45,8 @@ export interface QaPromptInput {
   /** 切片 1 固定传 0；签名保留给多轮。 */
   historyTurns?: number;
   history?: QaPromptTurn[];
+  /** 已裁剪好的暂停帧；有值时最后一条 user 消息改成 image + text。 */
+  frame?: { dataUrl: string };
 }
 
 export interface QaPromptWindow {
@@ -128,7 +134,10 @@ export function buildQaPrompt(input: QaPromptInput): QaPromptResult {
     .sort((a, b) => a.from - b.from);
   const budget = Math.max(500, Math.floor(input.maxInputTokens ?? 3000));
   const baseWindow = Math.max(10, Math.floor(input.windowSec ?? 90));
-  const systemText = cues.length === 0 ? `${QA_SYSTEM_PROMPT}\n${QA_NO_SUBTITLE_NOTE}` : QA_SYSTEM_PROMPT;
+  const systemParts = [QA_SYSTEM_PROMPT];
+  if (cues.length === 0) systemParts.push(QA_NO_SUBTITLE_NOTE);
+  if (input.frame) systemParts.push(QA_FRAME_NOTE);
+  const systemText = systemParts.join('\n');
 
   let windowSec = baseWindow;
   let usedCues = pickCues(cues, input.at, windowSec);
@@ -176,7 +185,18 @@ export function buildQaPrompt(input: QaPromptInput): QaPromptResult {
     messages.push({ role: 'user', content: turn.q });
     messages.push({ role: 'assistant', content: turn.a });
   }
-  messages.push({ role: 'user', content: text });
+  if (input.frame) {
+    // 顺序按协议要求：image 在前、text 在后；detail 固定 high。
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: input.frame.dataUrl, detail: 'high' } },
+        { type: 'text', text },
+      ],
+    });
+  } else {
+    messages.push({ role: 'user', content: text });
+  }
 
   return { messages, window, usedCues };
 }

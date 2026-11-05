@@ -1,5 +1,6 @@
 import type { VideoInfo, VideoMeta } from '../shared/types';
 import { clampSeconds } from '../shared/citations';
+import { QA_MIN_VISIBLE_RATIO, type QaRect, type QaViewport } from '../shared/qa';
 
 function readBvid(): string | null {
   const match = location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
@@ -79,6 +80,29 @@ export function getVideoElement(): HTMLVideoElement | null {
 export function getPlaybackTime(): number {
   const video = getVideoElement();
   return video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+}
+
+/**
+ * 当前 video 在视口里的可见矩形（已与视口求交）。
+ * 可见面积不足一半时返回 null：这时截出来是半张画面，不如不带图。
+ */
+export function getVisibleVideoRect(): { rect: QaRect; viewport: QaViewport } | null {
+  const video = getVideoElement();
+  if (!video) return null;
+  const box = video.getBoundingClientRect();
+  if (!(box.width > 0) || !(box.height > 0)) return null;
+
+  const viewport: QaViewport = { width: window.innerWidth, height: window.innerHeight };
+  const left = Math.max(0, box.left);
+  const top = Math.max(0, box.top);
+  const right = Math.min(viewport.width, box.right);
+  const bottom = Math.min(viewport.height, box.bottom);
+  const width = right - left;
+  const height = bottom - top;
+  if (width <= 0 || height <= 0) return null;
+  if ((width * height) / (box.width * box.height) < QA_MIN_VISIBLE_RATIO) return null;
+
+  return { rect: { x: left, y: top, width, height }, viewport };
 }
 
 /**
