@@ -41,6 +41,9 @@ test('真实抽帧：无字幕无章节时用画面生成大纲', async () => {
 
     const started = Date.now();
     await page.locator('.vt-outline-generate').click();
+    // 没有中文字幕时不自动抓帧：先点「按画面生成」。
+    await expect(page.locator('.vt-outline-frames')).toBeVisible({ timeout: 30_000 });
+    await page.locator('.vt-outline-frames').click();
     await expect(page.locator('.vt-outline-item').first()).toBeVisible({ timeout: 120_000 });
     const elapsed = Date.now() - started;
     const titles = await page.locator('.vt-outline-item').allInnerTexts();

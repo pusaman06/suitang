@@ -17,6 +17,9 @@ export function pickTrack(tracks: SubtitleTrack[], allowAnyLanguage = false): Su
   const zh =
     tracks.find(track => track.lan.toLowerCase() === 'zh-cn') ??
     tracks.find(track => track.lan.toLowerCase().startsWith('zh')) ??
+    // B 站自动生成的中文轨 lan 是 `ai-zh`，不是 `zh-CN`；不带这条判断会把
+    // 「有中文字幕」误判成没字幕，白白掉到转写或抽帧去。
+    tracks.find(track => /(^|-)zh(-|$)/i.test(track.lan)) ??
     null;
   if (zh) return zh;
   // 设置页的「测试字幕」只验证链路通不通，抓什么语言都算成功。

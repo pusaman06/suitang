@@ -393,6 +393,13 @@ test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复�
 
     const beforeRequests = mock.requests.length;
     await page.locator('.vt-outline-generate').click();
+    // 没有中文字幕时不再自动抓帧：先给提示和「按画面生成」按钮，由用户决定。
+    await expect(page.locator('.vt-outline-empty-text')).toContainText('没有中文字幕', {
+      timeout: 15_000,
+    });
+    const framesButton = page.locator('.vt-outline-frames');
+    await expect(framesButton).toBeVisible();
+    await framesButton.click();
     await expect(page.locator('.vt-outline-state')).toHaveText(/\d+ 段/, { timeout: 60_000 });
 
     // 抓帧结束后回到原时间；先等 seek 完成再看。

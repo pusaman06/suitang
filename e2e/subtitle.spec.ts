@@ -51,7 +51,6 @@ test.describe('D2 字幕抓取', () => {
   test.afterAll(async () => {
     await context?.close();
   });
-
   test('设置页诊断能拉到字幕并写进 chrome.storage.local', async () => {
     const host = page.locator('#video-tutor-host');
     await expect(host, '悬浮球没注入，检查 content script 是否加载').toBeAttached({ timeout: 60_000 });
@@ -81,4 +80,20 @@ test.describe('D2 字幕抓取', () => {
 
     expect(ourErrors, `扩展自身控制台报错：${ourErrors.join(' | ')}`).toHaveLength(0);
   });
+});
+
+/**
+ * B 站自动生成的中文轨 lan 是 `ai-zh`，不是 `zh-CN`。
+ * 只认 `zh` 开头的写法会把「有中文字幕」误判成没字幕，白掉到转写或抽帧去。
+ */
+test('pickTrack 认 ai-zh 这类自动生成的中文轨，但不会拿日语轨凑数', async () => {
+  const { pickTrack } = await import('../src/shared/subtitles');
+  const track = (lan: string) => ({ lan, lan_doc: lan, subtitle_url: 'https://example.com' });
+
+  expect(pickTrack([track('ai-zh')])?.lan).toBe('ai-zh');
+  expect(pickTrack([track('ja'), track('ai-zh')])?.lan).toBe('ai-zh');
+  expect(pickTrack([track('zh-CN')])?.lan).toBe('zh-CN');
+  // 真没有中文时，普通调用返回 null（交给 ASR），只有诊断才允许兜底取任意轨。
+  expect(pickTrack([track('ja')])).toBeNull();
+  expect(pickTrack([track('ja')], true)?.lan).toBe('ja');
 });

@@ -283,11 +283,33 @@
   display: none;
 }
 
+.vt-outline-frames {
+  flex-basis: 100%;
+  margin-top: 2px;
+  padding: 5px 10px;
+  border: 1px solid rgba(126, 162, 255, 0.18);
+  border-radius: 7px;
+  background: transparent;
+  color: #9fb4e8;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.vt-outline-frames:hover {
+  border-color: rgba(126, 162, 255, 0.4);
+  background: rgba(79, 124, 255, 0.1);
+}
+
+.vt-outline-frames[hidden] {
+  display: none;
+}
+
 .vt-outline-list {
   display: grid;
   gap: 2px;
   /* 大纲是参考信息，不能把问答和输入框挤出面板；9 段左右滚动看。 */
-  max-height: 220px;
+  max-height: 170px;
   margin: 4px 0 0;
   padding: 0;
   overflow: auto;
@@ -295,6 +317,8 @@
 }
 
 .vt-conclusions {
+  max-height: 110px;
+  overflow: auto;
   margin: 2px 0 8px;
   padding: 8px 10px;
   border: 1px solid #2f3a52;
@@ -320,7 +344,7 @@
 .vt-outline-detail {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   overflow: hidden;
   margin: 0 0 6px;
   padding: 0 6px 0 49px;

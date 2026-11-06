@@ -72,6 +72,7 @@ export function mountUi(info: VideoInfo): UiHandle {
               <span class="vt-outline-cost">约 5–10 秒</span>
               <button class="vt-outline-asr" type="button">转写这段</button>
               <span class="vt-outline-asr-hint"></span>
+              <button class="vt-outline-frames" type="button" hidden>按画面生成</button>
             </div>
           </div>
           <ol class="vt-outline-list" hidden></ol>
@@ -129,6 +130,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineEmptyText = must<HTMLElement>(shadow, '.vt-outline-empty-text');
   const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
   const outlineAsr = must<HTMLButtonElement>(shadow, '.vt-outline-asr');
+  const outlineFrames = must<HTMLButtonElement>(shadow, '.vt-outline-frames');
   const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
   const outlineFoot = must<HTMLElement>(shadow, '.vt-outline-foot');
@@ -163,12 +165,15 @@ export function mountUi(info: VideoInfo): UiHandle {
   let captureTimer = 0;
 
   const OUTLINE_EMPTY_TEXT = '生成一份大纲，快速了解视频结构。';
+  const NO_SUBTITLE_TEXT =
+    '这条视频没有中文字幕。可以「转写这段」用语音转成中文（免费），也可以「按画面生成」用截图凑一份大纲。';
   let outline: Outline | null = null;
   let outlineKey = outlineInfoKey(info);
   let outlineExpanded = true;
   let outlineGenerating = false;
   let outlineGetToken = 0;
   let outlineRunToken = 0;
+  let outlineUseFrames = false;
   let outlineCapturing = false;
   let outlineCaptureDone = 0;
   let outlineCaptureTotal = 0;
@@ -589,6 +594,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     if (outline) {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;
+      outlineFrames.hidden = true;
       renderOutlineList();
     } else {
       outlineList.hidden = true;
@@ -810,6 +816,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineCapturing = false;
     outlineCaptureDone = 0;
     outlineCaptureTotal = 0;
+    outlineFrames.hidden = true;
     clearOutlineError();
     outlineEmpty.hidden = false;
     outlineEmptyText.textContent = '正在生成大纲，请稍候…';
@@ -836,16 +843,31 @@ export function mountUi(info: VideoInfo): UiHandle {
     };
 
     try {
-      let response = await sendGenerate();
-      if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
-
-      if (!response) {
-        fail('大纲生成失败，请重试');
-        return;
+      const useFrames = outlineUseFrames;
+      outlineUseFrames = false;
+      let response: OutlineGenerateResponse | undefined;
+      if (!useFrames) {
+        response = await sendGenerate();
+        if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
+        if (!response) {
+          fail('大纲生成失败，请重试');
+          return;
+        }
+        // 没有中文字幕：**不自动抓帧**。抓帧要来回 seek 视频、还慢，
+        // 得让用户自己选走哪条路（转写 / 按画面）。
+        if (!response.ok && response.code === 'no-subtitle') {
+          outlineGenerating = false;
+          outlineCapturing = false;
+          outlineEmpty.hidden = false;
+          outlineList.hidden = true;
+          outlineEmptyText.textContent = NO_SUBTITLE_TEXT;
+          outlineFrames.hidden = false;
+          renderOutlineState();
+          return;
+        }
       }
 
-      // 第一级/第二级都没有：字幕接口判了 no-subtitle，且章节不足 2 段。
-      if (!response.ok && response.code === 'no-subtitle') {
+      if (useFrames) {
         const times = outlineFrameTimes(requested.duration);
         let frames: QaFrame[] = [];
         try {
@@ -1059,6 +1081,12 @@ export function mountUi(info: VideoInfo): UiHandle {
 
   outlineHead.addEventListener('click', () => setOutlineExpanded(!outlineExpanded));
   outlineGenerate.addEventListener('click', () => void generateOutline());
+  outlineFrames.addEventListener('click', () => {
+    if (outlineGenerating) return;
+    outlineUseFrames = true;
+    outlineFrames.hidden = true;
+    void generateOutline();
+  });
   outlineRefresh.addEventListener('click', () => {
     if (outlineGenerating) return;
     outline = null;
