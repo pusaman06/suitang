@@ -881,7 +881,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   /* -------- D8 语音转写 -------- */
 
   function updateAsrButton(): void {
-    const minutes = Math.max(1, Math.ceil((currentInfo.duration ?? 0) / 60));
     const configured = Boolean(settings?.asrApiKey.trim());
     if (asrDone) {
       outlineAsr.textContent = '已转写';
@@ -890,8 +889,10 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineAsrHint.textContent = `已缓存 ${asrSegments} 句`;
       return;
     }
-    outlineAsr.textContent = `转写这段（约 ${minutes} 分钟）`;
-    outlineAsr.disabled = asrTranscribing || outlineGenerating || !configured;
+    outlineAsr.textContent = asrTranscribing ? '正在转写…' : '转写这段';
+    // 只在真正没法点的时候禁用（正在转写）。缺 Key、大纲生成中都不禁用：
+    // 按钮灰着不给理由，用户只会觉得「点了没反应」。
+    outlineAsr.disabled = asrTranscribing;
     if (!configured) {
       outlineAsr.title = '先在设置页填写语音转写 Key';
       outlineAsrHint.textContent = '先在设置页填写语音转写 Key';
@@ -982,9 +983,14 @@ export function mountUi(info: VideoInfo): UiHandle {
   chrome.runtime.onMessage.addListener(onAsrMessage);
 
   async function startAsr(): Promise<void> {
-    if (asrTranscribing || outlineGenerating) return;
+    if (asrTranscribing) return;
+    // 点了必须有反馈：以前这里直接 return，用户看到的就是「按钮点不动」。
+    if (outlineGenerating) {
+      outlineAsrHint.textContent = '大纲还在生成，等它出来再转写';
+      return;
+    }
     if (!settings?.asrApiKey.trim()) {
-      updateAsrButton();
+      outlineAsrHint.textContent = '先在设置页填写语音转写 Key';
       return;
     }
     if (!currentInfo.cid || !currentInfo.duration || currentInfo.duration <= 0) {

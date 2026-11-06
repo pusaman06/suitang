@@ -6,14 +6,21 @@ export function normalizeSubtitleUrl(url: string): string {
   return url;
 }
 
-/** 优先中文轨道，其次任意 zh，最后第一条。 */
-export function pickTrack(tracks: SubtitleTrack[]): SubtitleTrack | null {
-  if (tracks.length === 0) return null;
-  return (
-    tracks.find(track => track.lan === 'zh-CN') ??
+/**
+ * 只认中文字幕。
+ *
+ * B 站会给一部分视频生成「翻译成其它语言」的 AI 字幕轨道：一个中文视频可能
+ * 只有一条 `ja` 轨道（内容是中文原话的日文翻译）。这种轨道对我们没用——拿它
+ * 生成的大纲和底稿全是日文。所以没有中文轨道就当「没有字幕」，交给 ASR 出中文。
+ */
+export function pickTrack(tracks: SubtitleTrack[], allowAnyLanguage = false): SubtitleTrack | null {
+  const zh =
+    tracks.find(track => track.lan.toLowerCase() === 'zh-cn') ??
     tracks.find(track => track.lan.toLowerCase().startsWith('zh')) ??
-    tracks[0]
-  );
+    null;
+  if (zh) return zh;
+  // 设置页的「测试字幕」只验证链路通不通，抓什么语言都算成功。
+  return allowAnyLanguage ? (tracks[0] ?? null) : null;
 }
 
 /**

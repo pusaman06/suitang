@@ -242,7 +242,15 @@ async function fetchTextDirect(url: string): Promise<PageFetch> {
 
 async function loadSubtitles(
   tabId: number,
-  request: { bvid: string; aid?: number; cid?: number; p: number; duration?: number },
+  request: {
+    bvid: string;
+    aid?: number;
+    cid?: number;
+    p: number;
+    duration?: number;
+    /** 设置页诊断用：任何语言的轨道都接受，只验证链路通不通。 */
+    allowAnyLanguage?: boolean;
+  },
 ): Promise<SubtitleResult> {
   const { bvid, aid, cid, p, duration } = request;
   if (!aid || !cid) return { ok: false, error: '缺少 aid/cid，请等页面元数据加载完再试' };
@@ -328,7 +336,7 @@ async function loadSubtitles(
     };
   }
 
-  const track = pickTrack(tracks);
+  const track = pickTrack(tracks, request.allowAnyLanguage === true);
   if (!track) return { ok: false, error: '没有可用字幕轨道' };
 
   const bodyFetch = await fetchSubtitleBody(track.subtitle_url);
@@ -1477,7 +1485,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: '缺少 bvid/aid/cid' } satisfies SubtitleResult);
       return false;
     }
-    void loadSubtitles(tabId, { bvid, aid, cid, p, duration })
+    // 设置页的「测试字幕」只验证链路，中文之外的轨道也算成功。
+    void loadSubtitles(tabId, { bvid, aid, cid, p, duration, allowAnyLanguage: true })
       .then(result => sendResponse(result))
       .catch(error =>
         sendResponse({ ok: false, error: String(error) } satisfies SubtitleResult),
