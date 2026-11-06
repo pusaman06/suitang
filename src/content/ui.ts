@@ -6,8 +6,11 @@ import type { UsageLedger } from '../shared/usage-store';
 import {
   outlineFrameTimes,
   type Outline,
+  type OutlineCapabilities,
+  type OutlineCapabilitiesResponse,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
+  type OutlineMode,
 } from '../shared/outline';
 import {
   QA_PORT_NAME,
@@ -77,8 +80,14 @@ export function mountUi(info: VideoInfo): UiHandle {
             </div>
           </div>
           <ol class="vt-outline-list" hidden></ol>
+          <div class="vt-outline-choices" hidden>
+            <div class="vt-outline-choices-title">换一种方式生成</div>
+            <div class="vt-outline-choices-hint">当前大纲会保留，新的成功后才替换。</div>
+            <div class="vt-outline-choice-list"></div>
+            <button class="vt-outline-choices-cancel" type="button">取消</button>
+          </div>
           <div class="vt-outline-foot" hidden>
-            <button class="vt-outline-refresh" type="button" title="清掉当前大纲，重新生成一份">
+            <button class="vt-outline-refresh" type="button" title="换一种方式重新生成">
               重新生成
             </button>
           </div>
@@ -125,7 +134,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineHead = must<HTMLButtonElement>(shadow, '.vt-outline-head');
   const outlineState = must<HTMLElement>(shadow, '.vt-outline-state');
   const outlineBody = must<HTMLElement>(shadow, '.vt-outline-body');
-const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
+  const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
   const conclusionsBox = must<HTMLElement>(shadow, '.vt-conclusions');
   const conclusionsList = must<HTMLUListElement>(shadow, '.vt-conclusions-list');
   const outlineEmpty = must<HTMLElement>(shadow, '.vt-outline-empty');
@@ -135,6 +144,9 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
   const outlineFrames = must<HTMLButtonElement>(shadow, '.vt-outline-frames');
   const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
+  const outlineChoices = must<HTMLElement>(shadow, '.vt-outline-choices');
+  const outlineChoiceList = must<HTMLElement>(shadow, '.vt-outline-choice-list');
+  const outlineChoicesCancel = must<HTMLButtonElement>(shadow, '.vt-outline-choices-cancel');
   const outlineFoot = must<HTMLElement>(shadow, '.vt-outline-foot');
   const outlineRefresh = must<HTMLButtonElement>(shadow, '.vt-outline-refresh');
   const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
@@ -175,7 +187,8 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
   let outlineGenerating = false;
   let outlineGetToken = 0;
   let outlineRunToken = 0;
-  let outlineUseFrames = false;
+  /** 用户选了「按语音转写切」但还没转写过：转完自动接上大纲。 */
+  let pendingOutlineAfterAsr = false;
   let outlineCapturing = false;
   let outlineCaptureDone = 0;
   let outlineCaptureTotal = 0;
@@ -812,17 +825,18 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
     }
   }
 
-  async function generateOutline(): Promise<void> {
+  async function generateOutline(mode: OutlineMode = 'auto'): Promise<void> {
     if (outlineGenerating) return;
     const requested = currentInfo;
     const key = outlineInfoKey(requested);
     if (!requested.duration || requested.duration <= 0) {
-      setOutlineError('还不知道视频时长，暂时不能生成大纲。', () => void generateOutline());
+      setOutlineError('还不知道视频时长，暂时不能生成大纲。', () => void generateOutline(mode));
       return;
     }
 
     const run = ++outlineRunToken;
     outlineGenerating = true;
+    hideOutlineChoices();
     outlineCapturing = false;
     outlineCaptureDone = 0;
     outlineCaptureTotal = 0;
@@ -832,7 +846,7 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
     outlineEmptyText.textContent = '正在生成大纲，请稍候…';
     renderOutlineState();
 
-    const sendGenerate = (frames?: QaFrame[]) =>
+    const sendGenerate = (frames?: QaFrame[], sendMode: OutlineMode = mode) =>
       chrome.runtime.sendMessage({
         type: 'outline:generate',
         bvid: requested.bvid,
@@ -841,6 +855,8 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
         title: requested.title,
         duration: requested.duration,
         frames,
+        // frames 靠 frames 数组本身识别，不占 mode 这个字段。
+        mode: sendMode === 'frames' ? undefined : sendMode,
       }) as Promise<OutlineGenerateResponse | undefined>;
 
     const fail = (message: string) => {
@@ -849,15 +865,14 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
       outlineCapturing = false;
       outlineCaptureDone = 0;
       outlineCaptureTotal = 0;
-      setOutlineError(message, () => void generateOutline());
+      setOutlineError(message, () => void generateOutline(mode));
     };
 
     try {
-      const useFrames = outlineUseFrames;
-      outlineUseFrames = false;
+      const useFrames = mode === 'frames';
       let response: OutlineGenerateResponse | undefined;
       if (!useFrames) {
-        response = await sendGenerate();
+        response = await sendGenerate(undefined, mode);
         if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
         if (!response) {
           fail('大纲生成失败，请重试');
@@ -939,6 +954,127 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
     if (video && !video.paused) video.pause();
     seekVideo(segment.start, { autoPlay: settings?.jumpAutoPlay === true });
     setOutlineActive(index);
+  }
+
+  /* -------- 换一种方式生成 -------- */
+
+  interface OutlineChoice {
+    mode: OutlineMode;
+    name: string;
+    describe: (caps: OutlineCapabilities) => string;
+    usable: (caps: OutlineCapabilities) => boolean;
+    blocked: (caps: OutlineCapabilities) => string;
+  }
+
+  const OUTLINE_CHOICES: OutlineChoice[] = [
+    {
+      mode: 'auto',
+      name: '自动挑一种',
+      describe: caps =>
+        caps.chapters.available
+          ? `用 UP 章节（${caps.chapters.count} 段）`
+          : '按字幕切段，约 5–10 秒',
+      usable: caps => caps.textKey || caps.chapters.available,
+      blocked: () => '没配 API Key，这个视频也没有 UP 章节',
+    },
+    {
+      mode: 'subtitle',
+      name: '按官方字幕切',
+      describe: caps => `${caps.subtitle.label}，约 5–10 秒`,
+      usable: caps => caps.subtitle.available && caps.textKey,
+      blocked: caps => (caps.subtitle.available ? '没配 API Key' : '这个视频没有中文字幕'),
+    },
+    {
+      mode: 'asr',
+      name: '按语音转写切',
+      describe: caps =>
+        caps.asr.available ? '已经转写过，约 5–10 秒' : '要先转写这段，约 1–5 分钟',
+      usable: caps => caps.textKey && (caps.asr.available || caps.asrKey),
+      blocked: caps => (caps.textKey ? '没配语音转写 Key' : '没配 API Key'),
+    },
+    {
+      mode: 'chapters',
+      name: '用 UP 主章节',
+      describe: caps => `共 ${caps.chapters.count} 段，1 秒`,
+      usable: caps => caps.chapters.available,
+      blocked: () => 'UP 主没有给这个视频分章节',
+    },
+    {
+      mode: 'frames',
+      name: '按画面生成',
+      describe: () => '截图给模型看，约 20–60 秒',
+      usable: caps => caps.textKey,
+      blocked: () => '没配 API Key',
+    },
+  ];
+
+  function hideOutlineChoices(): void {
+    outlineChoices.hidden = true;
+    outlineChoiceList.textContent = '';
+  }
+
+  function renderOutlineChoices(caps: OutlineCapabilities): void {
+    outlineChoiceList.textContent = '';
+    const current = outline?.captions;
+    for (const def of OUTLINE_CHOICES) {
+      const usable = def.usable(caps);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'vt-outline-choice';
+      button.dataset.mode = def.mode;
+      button.disabled = !usable;
+      // 已经转写过的，点了直接生成，不用再走一遍转写。
+      if (def.mode === 'asr' && caps.asr.available) button.dataset.ready = '1';
+
+      const name = document.createElement('span');
+      name.className = 'vt-outline-choice-name';
+      name.textContent = def.name;
+      if (def.mode === current) {
+        const badge = document.createElement('span');
+        badge.className = 'vt-outline-choice-badge';
+        badge.textContent = '当前';
+        name.append(badge);
+      }
+
+      const note = document.createElement('span');
+      note.className = 'vt-outline-choice-note';
+      note.textContent = usable ? def.describe(caps) : def.blocked(caps);
+      button.append(name, note);
+      outlineChoiceList.append(button);
+    }
+  }
+
+  async function openOutlineChoices(): Promise<void> {
+    if (outlineGenerating) return;
+    const requested = currentInfo;
+    if (!requested.duration || requested.duration <= 0) return;
+    if (!outlineChoices.hidden) {
+      hideOutlineChoices();
+      return;
+    }
+    outlineChoices.hidden = false;
+    outlineChoiceList.textContent = '';
+    const loading = document.createElement('p');
+    loading.className = 'vt-outline-choice-loading';
+    loading.textContent = '正在检查可用方式…';
+    outlineChoiceList.append(loading);
+
+    const response = (await chrome.runtime.sendMessage({
+      type: 'outline:capabilities',
+      bvid: requested.bvid,
+      p: requested.p,
+      cid: requested.cid,
+      title: requested.title,
+      duration: requested.duration,
+    })) as OutlineCapabilitiesResponse | undefined;
+
+    if (outlineChoices.hidden) return;
+    if (!response?.ok) {
+      loading.textContent =
+        response?.message ?? '检查失败。可以直接点「生成大纲」用自动方式。';
+      return;
+    }
+    renderOutlineChoices(response.capabilities);
   }
 
   /* -------- D8 语音转写 -------- */
@@ -1037,6 +1173,11 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
       outlineEmpty.hidden = false;
       outlineEmptyText.textContent = `转写完成，已缓存 ${asrSegments} 句字幕。`;
       renderOutlineState();
+      // 用户是冲着「按转写切大纲」点的转写，转完直接把大纲接上。
+      if (pendingOutlineAfterAsr) {
+        pendingOutlineAfterAsr = false;
+        void generateOutline('asr');
+      }
       return;
     }
     if (message.type === 'asr:error') {
@@ -1095,18 +1236,31 @@ const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
   outlineAsr.addEventListener('click', () => void startAsr());
 
   outlineHead.addEventListener('click', () => setOutlineExpanded(!outlineExpanded));
-  outlineGenerate.addEventListener('click', () => void generateOutline());
+  outlineGenerate.addEventListener('click', () => void generateOutline('auto'));
   outlineFrames.addEventListener('click', () => {
     if (outlineGenerating) return;
-    outlineUseFrames = true;
     outlineFrames.hidden = true;
-    void generateOutline();
+    void generateOutline('frames');
   });
-  outlineRefresh.addEventListener('click', () => {
-    if (outlineGenerating) return;
-    outline = null;
-    renderOutline();
-    void generateOutline();
+  outlineRefresh.addEventListener('click', () => void openOutlineChoices());
+  outlineChoicesCancel.addEventListener('click', () => {
+    hideOutlineChoices();
+  });
+  outlineChoiceList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+      '.vt-outline-choice',
+    );
+    if (!button || button.disabled) return;
+    const mode = button.dataset.mode as OutlineMode | undefined;
+    if (!mode) return;
+    hideOutlineChoices();
+    if (mode === 'asr' && !button.dataset.ready) {
+      // 还没转写过：先转写，转完自动接上大纲生成。
+      pendingOutlineAfterAsr = true;
+      void startAsr();
+      return;
+    }
+    void generateOutline(mode);
   });
   outlineRetry.addEventListener('click', () => {
     const retry = outlineRetryAction;

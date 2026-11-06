@@ -22,10 +22,12 @@ import {
   parseFrameTitles,
   parseOutline,
   type Outline,
+  type OutlineCapabilities,
   type OutlineCaption,
   type OutlineErrorCode,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
+  type OutlineMode,
   type OutlineSegment,
 } from '../shared/outline';
 import {
@@ -661,6 +663,8 @@ interface OutlineRequest {
   duration: number;
   /** 无字幕兜底：content 已按时间抽好的截图；有值时直接走视觉分支。 */
   frames?: QaFrame[];
+  /** 用户明确选的生成方式；不给就按 auto 的优先级自动挑。 */
+  mode?: OutlineMode;
 }
 
 class OutlineFailure extends Error {
@@ -817,6 +821,13 @@ function isQaFrame(value: unknown): value is QaFrame {
 function readOutlineFrames(value: unknown): QaFrame[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isQaFrame).slice(0, 10);
+}
+
+/** 面板传来的生成方式；认不出来就当没给，走 auto。 */
+function readOutlineMode(value: unknown): OutlineMode | undefined {
+  return value === 'auto' || value === 'subtitle' || value === 'asr' || value === 'chapters'
+    ? value
+    : undefined;
 }
 
 function readKbInfo(value: unknown): VideoInfo | null {
@@ -995,12 +1006,62 @@ async function generateFrameOutline(
   return outline;
 }
 
+/** 面板传来「换一种方式」之前，先把各条路的可用性摸清楚，免得给出一条走不通的。 */
+async function outlineCapabilities(
+  tabId: number,
+  request: OutlineRequest,
+): Promise<OutlineCapabilities> {
+  const settings = await loadSettings();
+  const caps: OutlineCapabilities = {
+    duration: request.duration,
+    textKey: settings.apiKey.trim() !== '',
+    subtitle: { available: false, label: '没有中文字幕' },
+    asr: { available: false },
+    asrKey: settings.asrApiKey.trim() !== '',
+    chapters: { available: false, count: 0 },
+  };
+
+  try {
+    const loaded = await outlineCues(tabId, request);
+    if (loaded.cues.length > 0) {
+      caps.subtitle = {
+        available: true,
+        label: loaded.track
+          ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
+          : '字幕（本地缓存）',
+      };
+    }
+  } catch (error) {
+    log('capabilities subtitle failed', error);
+  }
+
+  try {
+    caps.asr.available = (await readAsrResult(request.bvid, request.p, request.cid)) !== null;
+  } catch (error) {
+    log('capabilities asr failed', error);
+  }
+
+  try {
+    const meta = await readVideoMeta(tabId);
+    if (meta?.aid && request.cid) {
+      const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
+      const segments = chaptersToSegments(points, request.duration);
+      caps.chapters = { available: segments.length >= 2, count: segments.length };
+    }
+  } catch (error) {
+    log('capabilities chapters failed', error);
+  }
+
+  return caps;
+}
+
 async function generateOutline(
   tabId: number,
   request: OutlineRequest,
 ): Promise<OutlineGenerateResponse> {
   try {
     const settings = await loadSettings();
+    const mode: OutlineMode = request.mode ?? 'auto';
 
     // 视觉兜底：content 已经抽好帧，不再碰字幕/章节，直接一次视觉请求。
     const frames = request.frames ?? [];
@@ -1015,41 +1076,63 @@ async function generateOutline(
     let captions: OutlineCaption = 'subtitle';
     // 测试期诊断：记下「这份大纲到底靠什么生成的」，面板上直接显示。
     let captionDetail = '';
-    try {
-      const loaded = await outlineCues(tabId, request);
-      cues = loaded.cues;
-      captionDetail = loaded.track
-        ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
-        : '字幕（本地缓存）';
-    } catch (error) {
-      if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
-      // 没有官方字幕：先看有没有缓存过的 ASR（时间戳是估算的，D19 要标注）。
+
+    if (mode === 'asr') {
+      // 用户明确要「用已经转写的文字」，不再拉官方字幕。
       const asr = await readAsrResult(request.bvid, request.p, request.cid);
-      if (asr) {
-        cues = asrCues(asr);
-        captions = 'asr';
-        captionDetail = '语音转写 ASR（时间戳按字数估算）';
-      } else {
-        captionDetail = '没有可用字幕';
+      if (!asr) {
+        throw new OutlineFailure('no-asr', '这个视频还没有转写过，先点「转写这段」');
+      }
+      cues = asrCues(asr);
+      captions = 'asr';
+      captionDetail = '语音转写 ASR（时间戳按字数估算）';
+    } else {
+      try {
+        const loaded = await outlineCues(tabId, request);
+        cues = loaded.cues;
+        captionDetail = loaded.track
+          ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
+          : '字幕（本地缓存）';
+      } catch (error) {
+        // 用户明确选了「按官方字幕切」，拿不到就是拿不到，别偷偷换路。
+        if (mode === 'subtitle') throw error;
+        if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
+        // auto 时没有官方字幕：先看有没有缓存过的 ASR（时间戳是估算的，D19 要标注）。
+        // 用户明确选了「用 UP 章节」时不要再偷偷用 ASR 兜底，那不是他要的。
+        const asr =
+          mode === 'auto' ? await readAsrResult(request.bvid, request.p, request.cid) : null;
+        if (asr) {
+          cues = asrCues(asr);
+          captions = 'asr';
+          captionDetail = '语音转写 ASR（时间戳按字数估算）';
+        } else {
+          captionDetail = '没有可用字幕';
+        }
       }
     }
 
     // D13：UP 章节优先。章节是人手写的目录，边界准、不花钱，比模型切得准。
+    // 只有 auto 和 chapters 两种方式要读章节，用户选字幕/转写时不该被章节盖掉。
     let chapters: OutlineSegment[] = [];
-    try {
-      const meta = await readVideoMeta(tabId);
-      if (meta?.aid && request.cid) {
-        const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
-        chapters = chaptersToSegments(points, request.duration);
+    if (mode === 'auto' || mode === 'chapters') {
+      try {
+        const meta = await readVideoMeta(tabId);
+        if (meta?.aid && request.cid) {
+          const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
+          chapters = chaptersToSegments(points, request.duration);
+        }
+      } catch (error) {
+        log('view points failed', error);
       }
-    } catch (error) {
-      log('view points failed', error);
+    }
+    if (mode === 'chapters' && chapters.length < 2) {
+      throw new OutlineFailure('no-chapters', 'UP 主没有给这个视频分章节，换个方式试试');
     }
 
     let segments: OutlineSegment[];
     let model: string;
     let cutSource: string;
-    if (chapters.length >= 2) {
+    if (mode === 'chapters' || (mode === 'auto' && chapters.length >= 2)) {
       segments = chapters;
       model = 'bilibili-chapters';
       captions = 'chapters';
@@ -1921,6 +2004,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'outline:capabilities') {
+    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
+    const p =
+      typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
+    const cid =
+      typeof message.cid === 'number' && message.cid > 0 ? message.cid : undefined;
+    const title = typeof message.title === 'string' ? message.title.trim() : '';
+    const duration =
+      typeof message.duration === 'number' && Number.isFinite(message.duration)
+        ? message.duration
+        : 0;
+    const tabId =
+      typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
+    if (!bvid || !p || duration <= 0 || tabId === undefined) {
+      sendResponse({ ok: false, message: '缺少 bvid/p/duration 或标签页' });
+      return false;
+    }
+    void outlineCapabilities(tabId, { bvid, p, cid, title, duration })
+      .then(capabilities => sendResponse({ ok: true, capabilities }))
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '检查可用方式失败',
+        }),
+      );
+    return true;
+  }
+
   if (message?.type === 'outline:generate') {
     const bvid = typeof message.bvid === 'string' ? message.bvid : '';
     const p =
@@ -1971,6 +2082,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       title,
       duration,
       frames: frames.length > 0 ? frames : undefined,
+      mode: readOutlineMode(message.mode),
     };
     const jobKey = `${tabId}:${bvid}:${p}`;
     let job = outlineJobs.get(jobKey);

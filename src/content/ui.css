@@ -51,7 +51,7 @@
   width: 360px;
   max-width: calc(100vw - 44px);
   /* 球在 40% 处，面板从球下方开始；减掉偏移，保证 900px 高的窗口里不超出底边。 */
-  max-height: calc(60vh - 84px);
+  max-height: calc(66vh - 60px);
   overflow: auto;
   box-sizing: border-box;
   padding: 14px 16px 12px;
@@ -222,6 +222,124 @@
 
 .vt-outline-refresh:hover {
   color: rgba(255, 255, 255, 0.88);
+  text-decoration: underline;
+}
+
+.vt-outline-choices {
+  margin: 6px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid #3a4256;
+  border-radius: 8px;
+  background: #1c2130;
+}
+
+/* 展开「换一种方式」时先把大纲和结论收起来，否则选项会被挤出面板底边。 */
+.vt-outline-body:has(.vt-outline-choices:not([hidden])) .vt-outline-list,
+.vt-outline-body:has(.vt-outline-choices:not([hidden])) .vt-conclusions,
+.vt-outline-body:has(.vt-outline-choices:not([hidden])) .vt-outline-diag,
+.vt-outline-body:has(.vt-outline-choices:not([hidden])) .vt-outline-foot {
+  display: none;
+}
+
+/* 选项面板要能整块看见（含取消），这时候允许面板长高一点。 */
+.vt-panel:has(.vt-outline-choices:not([hidden])) {
+  max-height: calc(88vh - 40px);
+}
+
+.vt-outline-choices-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.vt-outline-choices-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #8b93a8;
+  line-height: 1.5;
+}
+
+.vt-outline-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 7px;
+  /* 选项多的时候自己滚，别把取消按钮顶出面板。 */
+  max-height: 268px;
+  overflow-y: auto;
+}
+
+.vt-outline-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 9px;
+  border: 1px solid rgba(126, 162, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(79, 124, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-outline-choice:hover:not(:disabled) {
+  border-color: rgba(126, 162, 255, 0.45);
+  background: rgba(79, 124, 255, 0.18);
+}
+
+.vt-outline-choice:disabled {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.4);
+  cursor: not-allowed;
+}
+
+.vt-outline-choice-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.vt-outline-choice-badge {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(126, 162, 255, 0.24);
+  color: #b8c8ff;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.vt-outline-choice-note {
+  font-size: 11px;
+  color: #8b93a8;
+  line-height: 1.5;
+}
+
+.vt-outline-choice:disabled .vt-outline-choice-note {
+  color: #7a7f8c;
+}
+
+.vt-outline-choice-loading {
+  margin: 0;
+  font-size: 11px;
+  color: #8b93a8;
+}
+
+.vt-outline-choices-cancel {
+  margin-top: 7px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vt-outline-choices-cancel:hover {
+  color: rgba(255, 255, 255, 0.85);
   text-decoration: underline;
 }
 

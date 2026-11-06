@@ -38,10 +38,32 @@ export interface OutlineRange {
 export type OutlineErrorCode =
   | 'no-key'
   | 'no-subtitle'
+  | 'no-asr'
+  | 'no-chapters'
   | 'network'
   | 'bad-output'
   | 'empty'
   | 'unknown';
+
+/**
+ * 生成方式：auto 按优先级自动挑，其余是用户在面板上明确选的。
+ * subtitle = 只用官方字幕；asr = 只用已转写的文字；chapters = 只用 UP 章节；frames = 画面截图。
+ */
+export type OutlineMode = 'auto' | 'subtitle' | 'asr' | 'chapters' | 'frames';
+
+/** 面板展开「换一种方式」时需要的可用性信息。 */
+export interface OutlineCapabilities {
+  duration: number;
+  textKey: boolean;
+  subtitle: { available: boolean; label: string };
+  asr: { available: boolean };
+  asrKey: boolean;
+  chapters: { available: boolean; count: number };
+}
+
+export type OutlineCapabilitiesResponse =
+  | { ok: true; capabilities: OutlineCapabilities }
+  | { ok: false; message: string };
 
 export type OutlineGetResponse =
   | { ok: true; outline: Outline | null }
