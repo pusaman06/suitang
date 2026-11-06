@@ -454,7 +454,12 @@ async function handle(req, res, videosRoot, kbDir, origin) {
       return;
     }
     const sourceDir = path.join(kbDir, ...KB_SOURCE_SUBDIR.split('/'), bvid);
-    const fileName = `p${p}.md`;
+    // 文件名由扩展生成（`<BV号>-p<NN>.md`），这里只校验不重造——命名规则只能有一处。
+    const fileName = typeof body?.fileName === 'string' ? body.fileName.trim() : '';
+    if (fileName === '' || !isValidKbFileName(fileName)) {
+      sendError(res, 400, 'bad-request', 'fileName 不合法（只接受纯文件名）', origin);
+      return;
+    }
     const file = path.join(sourceDir, fileName);
     let overwrote = false;
     try {

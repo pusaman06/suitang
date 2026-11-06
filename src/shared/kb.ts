@@ -13,12 +13,29 @@ export const KB_SOURCE_SUBDIR = '50-底稿/视频原文';
 
 export const DEFAULT_KB_DIR = 'D:\\knowledge-base';
 
-/** 原文底稿的绝对路径，写进索引卡的「原文」一节。 */
+/**
+ * 原文底稿的文件名。带上 BV 号，因为在知识库的目录列表里只显示文件名，
+ * 光一个 `p1.md` 认不出是哪个视频。补零保证同一视频的分 P 排序正确。
+ * **这是唯一一处命名规则**：扩展生成文件名，companion 只负责校验和落盘。
+ */
+export function kbSourceFileName(bvid: string, p: number): string {
+  return `${bvid}-p${String(p).padStart(2, '0')}.md`;
+}
+
+/** 原文底稿的绝对路径（展示给人看。真正可点的链接用 kbSourceLink）。 */
 export function kbSourcePath(bvid: string, p: number, kbDir: string = DEFAULT_KB_DIR): string {
   const root = kbDir.replace(/[\\/]+$/, '');
-  const pp = String(p).padStart(2, '0');
-  return `${root}\\${KB_SOURCE_SUBDIR.replace(/\//g, '\\')}\\${bvid}\\p${pp}.md`;
+  return `${root}\\${KB_SOURCE_SUBDIR.replace(/\//g, '\\')}\\${bvid}\\${kbSourceFileName(bvid, p)}`;
 }
+
+/**
+ * 从索引卡指向原文底稿的相对链接（索引卡在 `20-知识笔记/`，底稿在 `50-底稿/视频原文/<BV>/`）。
+ * 用相对路径而不是绝对路径：换机器、换库根都不会断。
+ */
+export function kbSourceLink(bvid: string, p: number): string {
+  return `../${KB_SOURCE_SUBDIR}/${bvid}/${kbSourceFileName(bvid, p)}`;
+}
+
 
 export interface KbQaPair {
   question: string;
@@ -142,7 +159,8 @@ export function buildKbMarkdown(input: KbNoteInput): string {
 
   lines.push('## 原文');
   lines.push('');
-  lines.push(`- 字幕全文：\`${kbSourcePath(info.bvid, info.p, input.kbDir)}\``);
+  lines.push(`- [字幕全文（${kbSourceFileName(info.bvid, info.p)}）](${kbSourceLink(info.bvid, info.p)})`);
+  lines.push(`- 本机路径：\`${kbSourcePath(info.bvid, info.p, input.kbDir)}\``);
   lines.push('');
 
   // 只在真的问过时才写这一段：没问过就整段不要，也不留空标题。

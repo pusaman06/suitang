@@ -28,6 +28,7 @@ import {
   buildKbSummaryPrompt,
   DEFAULT_KB_DIR,
   kbFileName,
+  kbSourceFileName,
   parseKbSummary,
   type KbQaPair,
 } from '../shared/kb';
@@ -571,6 +572,23 @@ async function cachedSubtitleLang(
   const cache = stored[key] as SubtitleCache | undefined;
   const lan = cache?.track?.lan;
   return typeof lan === 'string' && lan !== '' ? lan : undefined;
+}
+
+/** 存底稿时补字幕：页面记录里没有，就从字幕缓存 / ASR 缓存里捞一份。 */
+async function readCuesForSource(
+  bvid: string,
+  p: number,
+  cid?: number,
+): Promise<SubtitleCue[]> {
+  const prefix = cid ? `sub:${bvid}:${p}:${cid}` : `sub:${bvid}:${p}:`;
+  const all = await chrome.storage.local.get(null);
+  for (const key of Object.keys(all)) {
+    if (!key.startsWith(prefix)) continue;
+    const cache = all[key] as SubtitleCache | undefined;
+    if (cache?.cues?.length) return cache.cues;
+  }
+  const asr = await readAsrResult(bvid, p, cid);
+  return asr ? asrCues(asr) : [];
 }
 
 async function syncPageSnapshot(input: PagePayloadInput): Promise<void> {
@@ -1616,6 +1634,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }));
         }
       }
+      // 抽帧/章节这两条大纲路径写快照时字幕是空的，底稿不能因此丢字幕：
+      // 页面记录没有就去字幕缓存、再不行去 ASR 缓存里补一份。
+      if (!merged.subtitle || merged.subtitle.segments.length === 0) {
+        const cues = await readCuesForSource(info.bvid, info.p, merged.cid);
+        if (cues.length > 0) {
+          merged.subtitle = {
+            lang: merged.subtitle?.lang ?? 'unknown',
+            source: merged.subtitle?.source ?? 'bilibili',
+            segments: cues.map(cue => ({ from: cue.from, to: cue.to, text: cue.content })),
+          };
+        }
+      }
       sendResponse({
         ok: true,
         fileName: kbFileName({ title: info.title, bvid: info.bvid, now }),
@@ -1672,7 +1702,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       let source: string | undefined;
       if (sourceMarkdown.trim() !== '' && bvid !== '' && Number.isInteger(p) && p > 0) {
-        const saved = await post('/api/kb/source', { bvid, p, markdown: sourceMarkdown });
+        const saved = await post('/api/kb/source', {
+          bvid,
+          p,
+          fileName: kbSourceFileName(bvid, p),
+          markdown: sourceMarkdown,
+        });
         source = saved.relative;
       }
       const data = await post('/api/kb/note', { fileName, markdown });
