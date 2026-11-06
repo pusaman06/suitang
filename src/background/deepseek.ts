@@ -7,8 +7,10 @@ import type { ChatMessage, QaErrorInfo, QaUsage } from '../shared/qa';
 import { EMPTY_USAGE } from '../shared/qa';
 
 /** 连接 + 整体上限；空闲上限在每次收到字节时重置。 */
-export const DEEPSEEK_TOTAL_TIMEOUT_MS = 180_000;
-export const DEEPSEEK_IDLE_TIMEOUT_MS = 45_000;
+// 长字幕（三万字符）首 token 可能等一分钟以上，idle 放宽到 120 秒；
+// 总时长给到 5 分钟，否则 52 分钟的视频切不出大纲。
+export const DEEPSEEK_TOTAL_TIMEOUT_MS = 300_000;
+export const DEEPSEEK_IDLE_TIMEOUT_MS = 120_000;
 
 export class QaError extends Error {
   readonly info: QaErrorInfo;
