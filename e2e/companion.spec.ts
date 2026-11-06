@@ -419,3 +419,49 @@ test('失败队列里的条目，点一下「同步失败 N 条」就放回队�
     await options.close();
   }
 });
+
+test('点「同步失败 N 条」先弹确认，确认后才清空', async () => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/src/options/index.html`);
+  try {
+    await options.evaluate(async () => {
+      const failedAt = Date.now();
+      const item = (id: string, p: number) => ({
+        id,
+        kind: 'page',
+        bvid: 'BV1sHU9BmEne',
+        p,
+        payload: { bvid: 'BV1sHU9BmEne', p },
+        attempts: 3,
+        queuedAt: failedAt,
+        failedAt,
+        lastError: 'Failed to fetch',
+      });
+      await chrome.storage.local.set({
+        'sync:failed': [item('s-clear-1', 1), item('s-clear-2', 2)],
+        'sync:queue': [],
+      });
+    });
+  } finally {
+    await options.close();
+  }
+
+  await expect(page.locator('.vt-sync')).toContainText('同步失败 2 条', { timeout: 15_000 });
+  await page.locator('.vt-sync').click();
+  await expect(page.locator('.vt-sync-confirm')).toBeVisible();
+  await expect(page.locator('.vt-sync-confirm-text')).toContainText('2 条同步记录');
+  await page.screenshot({ path: resolve(SHOT_DIR, 'd6-sync-confirm.png'), fullPage: false });
+
+  await page.locator('.vt-sync-clear').click();
+  await expect(page.locator('.vt-sync-confirm')).toBeHidden();
+  await expect(page.locator('.vt-sync')).not.toContainText('同步失败', { timeout: 10_000 });
+
+  const check = await context.newPage();
+  await check.goto(`chrome-extension://${extensionId}/src/options/index.html`);
+  try {
+    const status = await sendRuntime<{ failed: number }>(check, { type: 'sync:status' });
+    expect(status.failed).toBe(0);
+  } finally {
+    await check.close();
+  }
+});

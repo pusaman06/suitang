@@ -409,6 +409,17 @@ export async function getSyncStatus(): Promise<SyncStatus> {
   return status;
 }
 
+/** 清空失败队列（用户确认后调用）；已经同步成功的条目不受影响。 */
+export function clearFailed(): Promise<number> {
+  return withQueueLock(async () => {
+    const failed = await readFailed();
+    if (failed.length === 0) return 0;
+    await writeFailed([]);
+    await cleanLastErrorIfEmpty();
+    return failed.length;
+  });
+}
+
 let flushPromise: Promise<SyncStatus> | null = null;
 
 /**

@@ -380,6 +380,57 @@
   color: #e08a8a;
 }
 
+.vt-sync-confirm {
+  margin: -3px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #3a4256;
+  border-radius: 8px;
+  background: #1c2130;
+}
+
+.vt-sync-confirm[hidden] {
+  display: none;
+}
+
+.vt-sync-confirm-text {
+  display: block;
+  color: #c9d1e3;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.vt-sync-confirm-foot {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.vt-sync-confirm-foot button {
+  padding: 4px 10px;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: transparent;
+  color: #b9c2d6;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.vt-sync-confirm-foot button:hover {
+  border-color: #4a5468;
+  color: #dde3f0;
+}
+
+.vt-sync-clear {
+  border-color: #6a3a3a !important;
+  color: #e08a8a !important;
+}
+
+.vt-sync-clear:hover {
+  border-color: #8a4a4a !important;
+  color: #f0a0a0 !important;
+}
+
 .vt-usage {
   display: block;
   width: 100%;

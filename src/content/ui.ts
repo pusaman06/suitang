@@ -85,6 +85,14 @@ export function mountUi(info: VideoInfo): UiHandle {
       </section>
       <div class="vt-status">就绪</div>
       <button class="vt-sync" type="button" title="点击手动重试同步">同步检查中…</button>
+      <div class="vt-sync-confirm" hidden>
+        <span class="vt-sync-confirm-text"></span>
+        <div class="vt-sync-confirm-foot">
+          <button class="vt-sync-retry" type="button">再试一次</button>
+          <button class="vt-sync-clear" type="button">清空</button>
+          <button class="vt-sync-dismiss" type="button">取消</button>
+        </div>
+      </div>
       <button class="vt-usage" type="button" title="点击刷新用量">今日 ≈¥0.00</button>
       <div class="vt-history-head" hidden>
         <button class="vt-clear" type="button">清空记录</button>
@@ -134,6 +142,11 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const status = must<HTMLElement>(shadow, '.vt-status');
   const syncLine = must<HTMLButtonElement>(shadow, '.vt-sync');
+  const syncConfirm = must<HTMLElement>(shadow, '.vt-sync-confirm');
+  const syncConfirmText = must<HTMLElement>(shadow, '.vt-sync-confirm-text');
+  const syncRetryButton = must<HTMLButtonElement>(shadow, '.vt-sync-retry');
+  const syncClearButton = must<HTMLButtonElement>(shadow, '.vt-sync-clear');
+  const syncDismissButton = must<HTMLButtonElement>(shadow, '.vt-sync-dismiss');
   const usageLine = must<HTMLButtonElement>(shadow, '.vt-usage');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
   const historyHead = must<HTMLElement>(shadow, '.vt-history-head');
@@ -408,8 +421,13 @@ export function mountUi(info: VideoInfo): UiHandle {
     frameHint.hidden = text === '';
   };
 
+  /** 最近一次同步状态；点那行字时要用它判断是「重试」还是「确认清空」。 */
+  let lastSync: SyncStatus | null = null;
+
   /** D6 同步状态：只显示一行小字，失败不打断问答。 */
   const renderSyncStatus = (next: SyncStatus) => {
+    lastSync = next;
+    if (next.failed === 0) syncConfirm.hidden = true;
     syncLine.classList.remove('vt-sync-error');
     if (!next.enabled) {
       syncLine.textContent = '同步已关闭';
@@ -463,9 +481,10 @@ export function mountUi(info: VideoInfo): UiHandle {
     }, 5000);
   };
 
-  syncLine.addEventListener('click', () => {
+  const flushSync = () => {
     if (syncBusy) return;
     syncBusy = true;
+    syncConfirm.hidden = true;
     syncLine.textContent = '同步中…';
     void chrome.runtime
       .sendMessage({ type: 'sync:flush' })
@@ -477,6 +496,39 @@ export function mountUi(info: VideoInfo): UiHandle {
       .finally(() => {
         syncBusy = false;
       });
+  };
+
+  const clearSyncFailed = () => {
+    if (syncBusy) return;
+    syncBusy = true;
+    syncConfirm.hidden = true;
+    syncLine.textContent = '清空中…';
+    void chrome.runtime
+      .sendMessage({ type: 'sync:clear-failed' })
+      .then(() => refreshSync())
+      .catch(() => {
+        syncLine.textContent = '清空失败';
+        syncLine.classList.add('vt-sync-error');
+      })
+      .finally(() => {
+        syncBusy = false;
+      });
+  };
+
+  syncLine.addEventListener('click', () => {
+    // 有失败记录时先问清楚：是要再试一次，还是直接清掉。
+    if (lastSync && lastSync.failed > 0) {
+      syncConfirmText.textContent = `共 ${lastSync.failed} 条同步记录重复失败，可能已经没用了。`;
+      syncConfirm.hidden = false;
+      return;
+    }
+    flushSync();
+  });
+
+  syncRetryButton.addEventListener('click', flushSync);
+  syncClearButton.addEventListener('click', clearSyncFailed);
+  syncDismissButton.addEventListener('click', () => {
+    syncConfirm.hidden = true;
   });
 
   /** D10 用量：只显示今日/本月，失败保持上一次的值，不打断输入。 */

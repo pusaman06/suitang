@@ -33,6 +33,7 @@ import { extractCitationSeconds } from '../shared/citations';
 import {
   buildCoursePayload,
   buildPagePayload,
+  clearFailed,
   enqueueAndFlush,
   flushQueue,
   getSyncStatus,
@@ -1813,6 +1814,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: false,
           message: error instanceof Error ? error.message : '同步失败',
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'sync:clear-failed') {
+    void clearFailed()
+      .then(count =>
+        getSyncStatus().then(status => sendResponse({ ok: true, cleared: count, status })),
+      )
+      .catch(error =>
+        sendResponse({
+          ok: false,
+          message: error instanceof Error ? error.message : '清空失败队列失败',
         }),
       );
     return true;
