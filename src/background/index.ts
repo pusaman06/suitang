@@ -478,6 +478,82 @@ function asrError(error: unknown): AsrError {
   };
 }
 
+const AUDIO_CHUNK_BYTES = 2 * 1024 * 1024;
+
+function base64ToBytes(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+let offscreenReady = false;
+
+/**
+ * 确保离屏文档在。
+ *
+ * 为什么不让 service worker 自己下：同样是扩展上下文、同样有 <all_urls> 权限，
+ * 扩展页面里 fetch 一条 26MB 的音轨 4.9 秒就下完；service worker 里会拖到三十秒以上
+ * 然后 network error——MV3 的 worker 会被挂起，长连接扛不住。
+ * 离屏文档是持久的扩展页面，跟 options 页一样稳。
+ */
+async function ensureOffscreenDocument(): Promise<void> {
+  if (offscreenReady) return;
+  const has = await chrome.offscreen.hasDocument?.().catch(() => false);
+  if (!has) {
+    await chrome.offscreen
+      .createDocument({
+        url: 'offscreen.html',
+        reasons: [chrome.offscreen.Reason.BLOBS],
+        justification: '下载音轨并送去语音转写',
+      })
+      .catch(error => {
+        // 已有文档时这里会报错，说明目标已达成，忽略。
+        if (!String(error).includes('Only a single offscreen')) throw error;
+      });
+  }
+  offscreenReady = true;
+}
+
+/** 让离屏文档下载音频，再按块取回来拼接。 */
+async function downloadAudioViaOffscreen(url: string): Promise<ArrayBuffer> {
+  await ensureOffscreenDocument();
+  const opened = (await chrome.runtime.sendMessage({
+    type: 'offscreen:fetch',
+    url,
+  })) as { ok?: boolean; total?: number; message?: string } | undefined;
+  if (!opened?.ok || !opened.total) {
+    throw new Error(`下载音轨失败：${opened?.message ?? '离屏文档没有响应'}`);
+  }
+  const total = opened.total;
+
+  const parts: Uint8Array[] = [];
+  let received = 0;
+  while (received < total) {
+    const chunk = (await chrome.runtime.sendMessage({
+      type: 'offscreen:chunk',
+      offset: received,
+      size: AUDIO_CHUNK_BYTES,
+    })) as { ok?: boolean; data?: string; message?: string } | undefined;
+    if (!chunk?.ok || !chunk.data) {
+      throw new Error(`取音轨数据失败：${chunk?.message ?? '离屏文档没有响应'}`);
+    }
+    const bytes = base64ToBytes(chunk.data);
+    if (bytes.byteLength === 0) throw new Error('取音轨数据失败：收到空数据');
+    parts.push(bytes);
+    received += bytes.byteLength;
+  }
+  void chrome.runtime.sendMessage({ type: 'offscreen:close' }).catch(() => {});
+
+  const merged = new Uint8Array(received);
+  let offset = 0;
+  for (const part of parts) {
+    merged.set(part, offset);
+    offset += part.byteLength;
+  }
+  return merged.buffer;
+}
+
 async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrResult> {
   const settings = await loadSettings();
   if (!settings.asrApiKey.trim()) {
@@ -503,7 +579,14 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
 
   const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid);
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 0, total: 1 });
-  const buffer = await downloadAudio(track.url);
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await downloadAudioViaOffscreen(track.url);
+  } catch (error) {
+    // 离屏文档起不来时退回后台直连，短音频够用。
+    log('offscreen audio download failed, falling back', error);
+    buffer = await downloadAudio(track.url);
+  }
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 1, total: 1 });
 
   if (buffer.byteLength > ASR_MAX_AUDIO_BYTES || duration > ASR_MAX_AUDIO_SECONDS) {

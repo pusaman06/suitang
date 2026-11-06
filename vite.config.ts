@@ -11,6 +11,7 @@ export default defineConfig({
       input: {
         background: r('src/background/index.ts'),
         options: r('src/options/index.html'),
+        offscreen: r('src/offscreen/index.ts'),
       },
       output: {
         entryFileNames: '[name].js',

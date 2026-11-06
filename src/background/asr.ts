@@ -180,7 +180,9 @@ export async function getAudioTrack(
 export async function downloadAudio(url: string): Promise<ArrayBuffer> {
   let response: Response;
   try {
-    response = await fetch(url);
+    // 不设自定义头：service worker 里 Referer 属于 forbidden header，设了会被
+    // 浏览器直接拒掉（表现为 Failed to fetch）。Referer 统一交给 DNR 规则改。
+    response = await fetch(url, { credentials: 'omit' });
   } catch (error) {
     throw new AsrFailure(
       'download',
