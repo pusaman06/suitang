@@ -76,6 +76,7 @@ export function mountUi(info: VideoInfo): UiHandle {
               <span class="vt-outline-cost">约 5–10 秒</span>
               <button class="vt-outline-asr" type="button">转写这段</button>
               <span class="vt-outline-asr-hint"></span>
+              <button class="vt-outline-chapters" type="button" hidden>按章节生成</button>
               <button class="vt-outline-frames" type="button" hidden>按画面生成</button>
             </div>
           </div>
@@ -142,6 +143,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
   const outlineAsr = must<HTMLButtonElement>(shadow, '.vt-outline-asr');
   const outlineFrames = must<HTMLButtonElement>(shadow, '.vt-outline-frames');
+  const outlineChapters = must<HTMLButtonElement>(shadow, '.vt-outline-chapters');
   const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
   const outlineChoices = must<HTMLElement>(shadow, '.vt-outline-choices');
@@ -179,16 +181,30 @@ export function mountUi(info: VideoInfo): UiHandle {
   let captureTimer = 0;
 
   const OUTLINE_EMPTY_TEXT = '生成一份大纲，快速了解视频结构。';
-  const NO_SUBTITLE_TEXT =
-    '这条视频没有中文字幕。可以「转写这段」用语音转成中文（免费），也可以「按画面生成」用截图凑一份大纲。';
+  /** 这个长度以内，发现没字幕就直接转写；再长就先问一句，免得干等。 */
+  const AUTO_ASR_LIMIT_SECONDS = 15 * 60;
+
+  /** 粗估转写要多久：模型本身很快，主要耗时在下载音轨和切片。 */
+  function estimateAsrSeconds(duration: number): number {
+    return Math.max(15, Math.round(duration * 0.06));
+  }
+
+  function describeAsrTime(seconds: number): string {
+    return seconds < 60 ? `约 ${seconds} 秒` : `约 ${Math.round(seconds / 60)} 分钟`;
+  }
   let outline: Outline | null = null;
   let outlineKey = outlineInfoKey(info);
   let outlineExpanded = true;
   let outlineGenerating = false;
   let outlineGetToken = 0;
   let outlineRunToken = 0;
-  /** 用户选了「按语音转写切」但还没转写过：转完自动接上大纲。 */
-  let pendingOutlineAfterAsr = false;
+  /**
+   * 转写完成后要自动接着做什么：
+   * - 'asr'     用户选了「按语音转写切」
+   * - 'auto'    没有字幕，自动补了转写，转完继续走自动
+   * - null      不接着做
+   */
+  let pendingOutlineAfterAsr: OutlineMode | null = null;
   let outlineCapturing = false;
   let outlineCaptureDone = 0;
   let outlineCaptureTotal = 0;
@@ -618,6 +634,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;
       outlineFrames.hidden = true;
+      outlineChapters.hidden = true;
       renderOutlineList();
     } else {
       outlineList.hidden = true;
@@ -825,6 +842,28 @@ export function mountUi(info: VideoInfo): UiHandle {
     }
   }
 
+  /**
+   * 没生成成功时「重新生成」的选项面板不会出现，所以单独探一次有没有 UP 章节。
+   * 有就给一条「按章节生成」，否则没字幕 + 有章节的视频就没有任何能走的路。
+   */
+  async function probeChapters(): Promise<void> {
+    const info = currentInfo;
+    if (!info.cid || !info.duration || info.duration <= 0) return;
+    const response = (await chrome.runtime
+      .sendMessage({
+        type: 'outline:capabilities',
+        bvid: info.bvid,
+        p: info.p,
+        cid: info.cid,
+        title: info.title,
+        duration: info.duration,
+      })
+      .catch(() => undefined)) as OutlineCapabilitiesResponse | undefined;
+    if (outlineInfoKey(currentInfo) !== outlineInfoKey(info)) return;
+    if (!response?.ok) return;
+    outlineChapters.hidden = !response.capabilities.chapters.available;
+  }
+
   async function generateOutline(mode: OutlineMode = 'auto'): Promise<void> {
     if (outlineGenerating) return;
     const requested = currentInfo;
@@ -841,6 +880,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineCaptureDone = 0;
     outlineCaptureTotal = 0;
     outlineFrames.hidden = true;
+    outlineChapters.hidden = true;
     clearOutlineError();
     outlineEmpty.hidden = false;
     outlineEmptyText.textContent = '正在生成大纲，请稍候…';
@@ -888,11 +928,37 @@ export function mountUi(info: VideoInfo): UiHandle {
           // 把 background 给的真实原因显示出来，否则「没字幕 / 地址不匹配 /
           // 时长对不上」长得一模一样，用户和我们都无从判断。
           const reason = typeof response.message === 'string' ? response.message.trim() : '';
-          outlineEmptyText.textContent = reason
-            ? `${reason}。也可以「按画面生成」用截图凑一份大纲。`
-            : NO_SUBTITLE_TEXT;
-          outlineFrames.hidden = false;
+          const head = reason || '这个视频没有中文字幕';
+          const asrReady = !!settings?.asrApiKey.trim();
+          const asrSeconds = estimateAsrSeconds(requested.duration);
           renderOutlineState();
+
+          // 没字幕时，光有 UP 主章节名等于没讲内容（「引言 / 新闻 / 磕头」）。
+          // 有转写 Key 就自动补字幕：ASR 免费，这是唯一能把内容说清楚的路。
+          if (asrReady && requested.duration > 0 && requested.duration <= AUTO_ASR_LIMIT_SECONDS) {
+            outlineEmptyText.textContent = `${head}，正在用语音转写补字幕（${describeAsrTime(asrSeconds)}）…`;
+            outlineFrames.hidden = true;
+            pendingOutlineAfterAsr = mode;
+            void startAsr();
+            return;
+          }
+
+          // 长视频：先说清要等多久，别让人对着进度条干等十几分钟。
+          if (asrReady && requested.duration > AUTO_ASR_LIMIT_SECONDS) {
+            outlineEmptyText.textContent = `${head}。转写要 ${describeAsrTime(asrSeconds)}，点「转写这段」开始；也可以「按画面生成」用截图凑一份大纲。`;
+            outlineFrames.hidden = false;
+            outlineChapters.hidden = true;
+            void probeChapters();
+            return;
+          }
+
+          // 没配转写 Key：明说卡在哪，别让人反复点。
+          outlineEmptyText.textContent = `${head}。先在设置页填写语音转写 Key，再点「转写这段」；也可以「按画面生成」用截图凑一份大纲。`;
+          outlineFrames.hidden = false;
+          // 没有大纲时「重新生成」的选项面板不会出现，这里单独给一条「按章节生成」，
+          // 否则没字幕 + 有章节的视频就没有任何能走的路。
+          outlineChapters.hidden = true;
+          void probeChapters();
           return;
         }
       }
@@ -1137,6 +1203,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   function failAsr(message: string, run: number): void {
     if (run !== asrRunToken || asrKey !== outlineInfoKey(currentInfo)) return;
     asrTranscribing = false;
+    pendingOutlineAfterAsr = null;
     setOutlineError(`转写失败：${message}`, () => void startAsr());
   }
 
@@ -1173,10 +1240,12 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineEmpty.hidden = false;
       outlineEmptyText.textContent = `转写完成，已缓存 ${asrSegments} 句字幕。`;
       renderOutlineState();
-      // 用户是冲着「按转写切大纲」点的转写，转完直接把大纲接上。
+      // 转写完直接把大纲接上：用户要么选了「按语音转写切」，
+      // 要么是没有字幕、我们自动补了转写。
       if (pendingOutlineAfterAsr) {
-        pendingOutlineAfterAsr = false;
-        void generateOutline('asr');
+        const next = pendingOutlineAfterAsr;
+        pendingOutlineAfterAsr = null;
+        void generateOutline(next);
       }
       return;
     }
@@ -1242,6 +1311,11 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineFrames.hidden = true;
     void generateOutline('frames');
   });
+  outlineChapters.addEventListener('click', () => {
+    if (outlineGenerating) return;
+    outlineChapters.hidden = true;
+    void generateOutline('chapters');
+  });
   outlineRefresh.addEventListener('click', () => void openOutlineChoices());
   outlineChoicesCancel.addEventListener('click', () => {
     hideOutlineChoices();
@@ -1256,7 +1330,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     hideOutlineChoices();
     if (mode === 'asr' && !button.dataset.ready) {
       // 还没转写过：先转写，转完自动接上大纲生成。
-      pendingOutlineAfterAsr = true;
+      pendingOutlineAfterAsr = 'asr';
       void startAsr();
       return;
     }

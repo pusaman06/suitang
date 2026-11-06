@@ -1133,6 +1133,12 @@ async function generateOutline(
     let model: string;
     let cutSource: string;
     if (mode === 'chapters' || (mode === 'auto' && chapters.length >= 2)) {
+      // auto 模式下只有章节名、没有字幕说明，交出去的是一份「引言 / 新闻 / 磕头」，
+      // 看不出视频讲了什么。宁可让 UI 去转写，也别交这种东西。
+      // 用户主动选「用 UP 主章节」时不拦，那是他明确要的。
+      if (mode === 'auto' && cues.length === 0) {
+        throw new OutlineFailure('no-subtitle', '这个视频没有中文字幕，UP 主只分了章节标题');
+      }
       segments = chapters;
       model = 'bilibili-chapters';
       captions = 'chapters';

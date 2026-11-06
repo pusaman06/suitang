@@ -456,7 +456,7 @@ test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复�
   }
 });
 
-test('无字幕但有 UP 章节：直接用章节当大纲，不调模型', async () => {
+test('无字幕只有 UP 章节：不直接拿章节名凑数，提示先补字幕', async () => {
   await clearStorage(context, extensionId);
   await outlineSettings();
   await clearOutlineCache();
@@ -484,10 +484,18 @@ test('无字幕但有 UP 章节：直接用章节当大纲，不调模型', asyn
     await openPanel(page);
     const before = mock.requests.length;
     await page.locator('.vt-outline-generate').click();
+    // 只有章节名、没有内容说明的大纲等于没讲，宁可先要字幕。
+    await expect(page.locator('.vt-outline-empty-text')).toContainText('UP 主只分了章节标题', {
+      timeout: 20_000,
+    });
+    expect(mock.requests.length).toBe(before);
+
+    // 用户明确要「用 UP 主章节」时才直接给章节。
+    await expect(page.locator('.vt-outline-chapters')).toBeVisible({ timeout: 20_000 });
+    await page.locator('.vt-outline-chapters').click();
     await expect(page.locator('.vt-outline-item')).toHaveCount(3, { timeout: 20_000 });
     await expect(page.locator('.vt-outline-diag')).toContainText('UP 章节');
     await expect(page.locator('.vt-outline-item').first()).toContainText('开场与自我介绍');
-    // 章节是现成的，不应该再花钱问模型。
     expect(mock.requests.length).toBe(before);
   } finally {
     await context.unroute('**/x/player/v2**', chapterRoute);
