@@ -42,6 +42,14 @@ function isFrameRequest(body) {
   return isOutlineRequest(body) && countFrameImages(body) > 0;
 }
 
+/** 细节请求（第二轮补说明）：user 里带「## 第 1 段」，不消耗大纲答案队列。 */
+function isDetailRequest(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  return messages.some(
+    message => typeof message?.content === 'string' && message.content.includes('## 第 1 段'),
+  );
+}
+
 function countFrameImages(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   let count = 0;
@@ -62,16 +70,25 @@ function sseChunk(payload) {
 }
 
 export function createMockServer() {
-  /** @type {{ status: number, answer: string, outlineAnswer: string, frameAnswer: string, delayMs: number }} */
+  /** @type {{ status: number, answer: string, outlineAnswer: string, frameAnswer: string, delayMs: number, outlineQueue: string[] | null }} */
   const state = {
     status: 200,
     answer: DEFAULT_ANSWER,
     outlineAnswer: DEFAULT_OUTLINE_ANSWER,
     frameAnswer: DEFAULT_FRAME_TITLES,
     delayMs: 80,
+    // 分级重试用例：按顺序返回的切段答案，剩下最后一项时一直用它。
+    outlineQueue: null,
   };
   /** @type {Array<{ method: string, url: string, headers: Record<string, string>, body: any }>} */
   const requests = [];
+
+  /** 每次「切段」请求取一项；detail 请求不走这里。 */
+  const nextOutlineAnswer = () => {
+    const queue = state.outlineQueue;
+    if (!Array.isArray(queue) || queue.length === 0) return state.outlineAnswer;
+    return queue.length === 1 ? queue[0] : queue.shift();
+  };
 
   const server = http.createServer((req, res) => {
     const cors = {
@@ -117,7 +134,9 @@ export function createMockServer() {
         frameCount > 0
           ? frameTitlesFor(frameCount)
           : isOutlineRequest(body)
-            ? state.outlineAnswer
+            ? isDetailRequest(body)
+              ? state.outlineAnswer
+              : nextOutlineAnswer()
             : state.answer;
       // 切成 6 字左右的小片，模拟逐字返回。
       while (rest.length > 0) {
@@ -175,6 +194,7 @@ export function createMockServer() {
       state.outlineAnswer = DEFAULT_OUTLINE_ANSWER;
       state.frameAnswer = DEFAULT_FRAME_TITLES;
       state.delayMs = 80;
+      state.outlineQueue = null;
     },
   };
 }

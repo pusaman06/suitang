@@ -54,24 +54,62 @@ export function outlineSystemPrompt(range: OutlineRange, title: string, duration
 
 /** 无字幕时返回 null，调用方按 no-subtitle 处理，不把空上下文发给模型。 */
 export function buildOutlinePrompt(input: OutlinePromptInput): OutlinePrompt | null {
-  const range = segmentRange(input.duration);
   const lines: OutlineLine[] = compactCuesForOutline(input.cues, input.maxChars);
+  return buildOutlinePromptFromLines(input.title, input.duration, lines);
+}
+
+/**
+ * 用已经压好/抽稀好的行直接构建 prompt。
+ * 分级重试的第 3 级（缩输入）拿不到原始 cues，只能复用已经算好的 lineList。
+ */
+export function buildOutlinePromptFromLines(
+  title: string,
+  duration: number,
+  lines: OutlineLine[],
+): OutlinePrompt | null {
   if (lines.length === 0) return null;
+  const range = segmentRange(duration);
 
   const subtitleText = lines
     .map((line, index) => `#${index} [${formatTimestamp(line.from)}] ${line.text}`)
     .join('\n');
-  const user = `视频：《${input.title}》（时长 ${formatTimestamp(input.duration)}）\n\n字幕：\n${subtitleText}`;
+  const user = `视频：《${title}》（时长 ${formatTimestamp(duration)}）\n\n字幕：\n${subtitleText}`;
 
   return {
     messages: [
-      { role: 'system', content: outlineSystemPrompt(range, input.title, input.duration) },
+      { role: 'system', content: outlineSystemPrompt(range, title, duration) },
       { role: 'user', content: user },
     ],
     range,
     lines: lines.length,
     lineList: lines,
   };
+}
+
+export interface OutlineRepairPromptInput {
+  /** 上一次模型返回的原始文本（可能被截断、缺括号或夹了多余解释）。 */
+  raw: string;
+  range: OutlineRange;
+  title: string;
+}
+
+/**
+ * 分级重试第 2 级：把坏掉的输出原样发回去，只让它修 JSON 格式。
+ * 不重写内容，是因为切段的判断已经做完了，重写会换掉用户看过的分段。
+ */
+export function buildOutlineRepairPrompt(input: OutlineRepairPromptInput): ChatMessage[] {
+  const system = [
+    `你是课程笔记助手的 JSON 修复器。视频《${input.title}》的大纲本应是一个 JSON 数组，`,
+    '每项形如 {start_line, end_line, title}，行号从 0 开始、首尾相接覆盖全片。',
+    `下面这段输出格式坏了（可能被截断、缺引号或括号）。请只修复 JSON 格式：`,
+    `1. 补上缺失的引号、逗号、括号，让它成为一个能解析的数组；`,
+    `2. 目标 ${input.range.min}–${input.range.max} 项，保持时间顺序；`,
+    '3. 不要改写已有的 title，不要新增条目，不要输出解释或 markdown 围栏。',
+  ].join('\n');
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: `坏掉的原文：\n${input.raw}` },
+  ];
 }
 
 export interface OutlineDetailPromptInput {

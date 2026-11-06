@@ -602,3 +602,79 @@ test('选「用 UP 主章节」就换成章节，不重新问模型', async () =
     await context.unroute('**/x/player/v2**', route);
   }
 });
+
+test('大纲 JSON 被 max_tokens 截断时本地补全，不额外请求模型', async () => {
+  mock.reset();
+  await clearStorage(context, extensionId);
+  await outlineSettings();
+  await clearOutlineCache();
+  await openPanel(page);
+  await seedOutlineCues();
+
+  mock.state.delayMs = 10;
+  // 前 8 段完整，第 9 段写到一半就被截断（长视频切段时最常见）。
+  const full = JSON.parse(DEFAULT_OUTLINE_ANSWER) as Array<{
+    start: number;
+    end: number;
+    title: string;
+  }>;
+  const truncated =
+    JSON.stringify(full.slice(0, 8)).slice(0, -1) + ',{"start":800,"end":900,"title":"总结与后';
+  mock.state.outlineQueue = [truncated];
+
+  const before = mock.requests.length;
+  await page.locator('.vt-outline-generate').click();
+  // 补全后还剩 8 个完整段，够长视频的下限，直接出大纲。
+  await expect(page.locator('.vt-outline-state')).toHaveText('8 段', { timeout: 30_000 });
+  // 切段 + 补说明各一次；本地修复是免费的，没有多花请求。
+  expect(mock.requests.length).toBe(before + 2);
+});
+
+test('切段连续两次坏 JSON 时逐级重试，第三次拿到结果', async () => {
+  mock.reset();
+  await clearStorage(context, extensionId);
+  await outlineSettings();
+  await clearOutlineCache();
+  await openPanel(page);
+  await seedOutlineCues();
+
+  mock.state.delayMs = 10;
+  // 缺引号，本地补 ] 救不回来；前两次都坏，第三次给好答案。
+  const broken =
+    '[{start_line:0,end_line:100,title:第一段}, {"start":100,"end":200,"title":"第二段"}]';
+  mock.state.outlineQueue = [broken, broken, DEFAULT_OUTLINE_ANSWER];
+
+  const before = mock.requests.length;
+  await page.locator('.vt-outline-generate').click();
+  await expect(page.locator('.vt-outline-state')).toHaveText('9 段', { timeout: 60_000 });
+
+  // 切段三次：原样 → 修 JSON（2048）→ 扩预算（4096）；最后再补一次说明。
+  expect(mock.requests.length).toBe(before + 4);
+  const outlineBodies: Array<{ max_tokens?: number }> = mock.requests
+    .slice(before)
+    .map((request: { body: { max_tokens?: number } }) => request.body);
+  expect(outlineBodies.map(body => body?.max_tokens).slice(1)).toEqual([2048, 4096, 4096]);
+  // 第二次请求带着坏输出让模型修 JSON，而不是重新生成内容。
+  expect(JSON.stringify(outlineBodies[1])).toContain('坏掉的原文');
+});
+
+test('四级重试都救不回来时报格式错误，不假装成功', async () => {
+  mock.reset();
+  await clearStorage(context, extensionId);
+  await outlineSettings();
+  await clearOutlineCache();
+  await openPanel(page);
+  await seedOutlineCues();
+
+  mock.state.delayMs = 10;
+  const broken = '这不是 JSON，只是一段吐槽。';
+  mock.state.outlineQueue = [broken];
+
+  const before = mock.requests.length;
+  await page.locator('.vt-outline-generate').click();
+  // 原样 → 修 JSON → 扩预算 → 抽稀输入，四级都失败才报错。
+  await expect(page.locator('.vt-outline-error-text')).toContainText('格式不对', {
+    timeout: 60_000,
+  });
+  expect(mock.requests.length).toBe(before + 4);
+});

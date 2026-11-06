@@ -158,6 +158,40 @@ export function compactCuesForOutline(
   return kept;
 }
 
+/**
+ * 重试第 3 级用：隔行取一行再发给模型，保持全片覆盖。
+ * 只抽稀不截尾——截尾会让模型切不到后半段，系统只能把末段硬补到片尾，等于没内容。
+ */
+export function thinOutlineLines(lines: OutlineLine[], step = 2): OutlineLine[] {
+  if (step <= 1 || lines.length <= 2) return lines;
+  const kept: OutlineLine[] = [];
+  for (let index = 0; index < lines.length; index += step) kept.push(lines[index]);
+  const last = lines[lines.length - 1];
+  if (kept[kept.length - 1] !== last) kept.push(last);
+  return kept;
+}
+
+/**
+ * 本地抢救被 max_tokens 截断的数组：模型输出到一半就没了，最后一项不完整。
+ * 从末尾往前找最后一个完整的 `}`，截到那里补 `]` 重试解析——被截断是最常见的失败，
+ * 能本地修好就不花第二次钱（D20）。
+ */
+export function repairTruncatedOutlineJson(text: string): string | null {
+  const source = String(text).replace(/```(?:json)?/gi, '').trim();
+  const first = source.indexOf('[');
+  if (first < 0) return null;
+  const lastObject = source.lastIndexOf('}');
+  if (lastObject <= first) return null;
+  const candidate = `${source.slice(first, lastObject + 1)}]`;
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }

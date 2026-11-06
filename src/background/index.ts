@@ -13,6 +13,8 @@ import {
   buildFrameOutlinePrompt,
   buildOutlineDetailPrompt,
   buildOutlinePrompt,
+  buildOutlinePromptFromLines,
+  buildOutlineRepairPrompt,
   parseOutlineDetail,
 } from '../shared/outline-prompt';
 import {
@@ -21,6 +23,8 @@ import {
   outlineStorageKey,
   parseFrameTitles,
   parseOutline,
+  repairTruncatedOutlineJson,
+  thinOutlineLines,
   type Outline,
   type OutlineCapabilities,
   type OutlineCaption,
@@ -53,6 +57,7 @@ import {
 } from '../shared/video-record';
 import {
   QA_PORT_NAME,
+  type ChatMessage,
   type QaAskPayload,
   type QaClientMessage,
   type QaErrorInfo,
@@ -1244,30 +1249,74 @@ async function generateOutline(
       });
       if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
 
-      let text = '';
-      const startedAt = Date.now();
-      const result = await callDeepSeek({
-        apiKey: settings.apiKey,
-        baseUrl: settings.apiBaseUrl,
-        model: settings.textModel,
-        messages: prompt.messages,
-        thinking: false,
-        maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
-        temperature: 0.2,
-        onChunk: (kind, chunk) => {
-          if (kind === 'answer') text += chunk;
-        },
-      });
-      await recordUsage(estimateCostCny(result.usage, startedAt), startedAt).catch(error =>
-        log('outline usage failed', error),
-      );
+      // 每次模型调用单独记一次用量：重试也是真的花钱，成本面板要能看到。
+      const askOutline = async (messages: ChatMessage[], maxTokens: number): Promise<string> => {
+        const callStartedAt = Date.now();
+        let text = '';
+        const result = await callDeepSeek({
+          apiKey: settings.apiKey,
+          baseUrl: settings.apiBaseUrl,
+          model: settings.textModel,
+          messages,
+          thinking: false,
+          maxTokens,
+          temperature: 0.2,
+          onChunk: (kind, chunk) => {
+            if (kind === 'answer') text += chunk;
+          },
+        });
+        await recordUsage(estimateCostCny(result.usage, callStartedAt), callStartedAt).catch(error =>
+          log('outline usage failed', error),
+        );
+        return text.trim() !== '' ? text : result.text;
+      };
 
-      const raw = text.trim() !== '' ? text : result.text;
+      const baseMaxTokens = Math.min(4096, Math.max(1024, prompt.range.max * 80));
+      const raw = await askOutline(prompt.messages, baseMaxTokens);
       if (raw.trim() === '') {
         throw new OutlineFailure('empty', '模型没有返回内容，请重试');
       }
 
-      const parsed = parseOutline(raw, request.duration, prompt.range, prompt.lineList);
+      let parsed = parseOutline(raw, request.duration, prompt.range, prompt.lineList);
+
+      // D20 分级重试：长视频切段时 JSON 可能被 max_tokens 截断，以前一次失败就整条挂掉。
+      // 从「免费」往「更贵」逐级救，哪一级解析成功就停；都失败才报 bad-output。
+      if (!parsed) {
+        // 第 1 级（免费）：被截断是最常见的失败，本地补个 `]` 就能救。
+        const salvaged = repairTruncatedOutlineJson(raw);
+        if (salvaged) {
+          parsed = parseOutline(salvaged, request.duration, prompt.range, prompt.lineList);
+          if (parsed) log('outline recovered by local truncation repair');
+        }
+      }
+      if (!parsed) {
+        // 第 2 级：把坏输出发回去，只让它修 JSON，不重写内容。
+        log('outline retry: repair json');
+        const repaired = await askOutline(
+          buildOutlineRepairPrompt({ raw, range: prompt.range, title: request.title }),
+          2048,
+        );
+        parsed = parseOutline(repaired, request.duration, prompt.range, prompt.lineList);
+      }
+      if (!parsed) {
+        // 第 3 级：同一份字幕，把输出预算扩到 4096 重发。
+        log('outline retry: bigger budget');
+        const bigger = await askOutline(prompt.messages, 4096);
+        parsed = parseOutline(bigger, request.duration, prompt.range, prompt.lineList);
+      }
+      if (!parsed) {
+        // 第 4 级：隔行抽稀字幕，输出自然短一半；细节会变粗，但好过整条失败。
+        log('outline retry: thinner input');
+        const thinned = buildOutlinePromptFromLines(
+          request.title,
+          request.duration,
+          thinOutlineLines(prompt.lineList),
+        );
+        if (thinned) {
+          const thinner = await askOutline(thinned.messages, 2048);
+          parsed = parseOutline(thinner, request.duration, thinned.range, thinned.lineList);
+        }
+      }
       if (!parsed) {
         log('outline raw output', raw.slice(0, 1500));
         throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
