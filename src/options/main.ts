@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../shared/settings
 import { formatCueTime } from '../shared/subtitles';
 import type { SubtitleResult, VideoMeta } from '../shared/types';
 import type { UsageLedger } from '../shared/usage-store';
+import { CACHE_KEY_PREFIXES } from '../shared/video-record';
 
 const apiKey = el<HTMLInputElement>('#api-key');
 const visionModel = el<HTMLInputElement>('#vision-model');
@@ -30,6 +31,9 @@ const status = el<HTMLParagraphElement>('#status');
 const diagPing = el<HTMLButtonElement>('#diag-ping');
 const diagSub = el<HTMLButtonElement>('#diag-sub');
 const diagLog = el<HTMLPreElement>('#diag-log');
+const cacheSummary = el<HTMLElement>('#cache-summary');
+const cacheClear = el<HTMLButtonElement>('#cache-clear');
+const cacheStatus = el<HTMLParagraphElement>('#cache-status');
 
 function el<T extends Element>(selector: string): T {
   const node = document.querySelector<T>(selector);
@@ -121,10 +125,61 @@ async function init(): Promise<void> {
     settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
   renderBudget();
   void loadUsage();
+  void loadCacheStats();
 }
 
 refreshBalance.addEventListener('click', () => {
   void loadBalance();
+});
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadCacheStats(): Promise<void> {
+  const reply = (await chrome.runtime.sendMessage({ type: 'cache:stats' })) as
+    | { ok?: boolean; videos?: number; entries?: number; bytes?: number; message?: string }
+    | undefined;
+  if (!reply?.ok) {
+    cacheSummary.textContent = '统计失败';
+    cacheStatus.textContent = reply?.message ?? '后台没有响应';
+    return;
+  }
+  const videos = reply.videos ?? 0;
+  if (videos === 0) {
+    cacheSummary.textContent = '还没有缓存';
+    cacheClear.disabled = true;
+    return;
+  }
+  cacheSummary.textContent = `已缓存 ${videos} 个视频 · ${formatBytes(reply.bytes ?? 0)}`;
+  cacheClear.disabled = false;
+}
+
+// 别的页面（视频页）边看边写缓存时，这里的数字跟着变。
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  const touched = Object.keys(changes).some(key =>
+    CACHE_KEY_PREFIXES.some(prefix => key.startsWith(prefix)),
+  );
+  if (touched) void loadCacheStats();
+});
+
+cacheClear.addEventListener('click', () => {  void (async () => {
+    cacheClear.disabled = true;
+    cacheStatus.textContent = '正在清空…';
+    const reply = (await chrome.runtime.sendMessage({ type: 'cache:clear-all' })) as
+      | { ok?: boolean; cleared?: number; message?: string }
+      | undefined;
+    if (!reply?.ok) {
+      cacheClear.disabled = false;
+      cacheStatus.textContent = reply?.message ?? '清空失败';
+      return;
+    }
+    cacheStatus.textContent = `已清空 ${reply.cleared ?? 0} 条（知识库里的那份不受影响）`;
+    await loadCacheStats();
+  })();
 });
 
 save.addEventListener('click', () => {

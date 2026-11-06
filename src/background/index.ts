@@ -34,6 +34,7 @@ import {
 import { extractCitationSeconds } from '../shared/citations';
 import {
   buildPagePayload,
+  CACHE_KEY_PREFIXES,
   pageStorageKey,
   readPageRecord,
   writePageRecord,
@@ -1514,6 +1515,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({
         ok: false,
         message: error instanceof Error ? error.message : '清空问答记录失败',
+      }),
+    );
+    return true;
+  }
+
+  // 设置页「缓存」：看一下占了多少，或者一把清干净。
+  if (message?.type === 'cache:stats') {
+    void (async () => {
+      const all = await chrome.storage.local.get(null);
+      const keys = Object.keys(all).filter(key => CACHE_KEY_PREFIXES.some(it => key.startsWith(it)));
+      const videos = new Set<string>();
+      let bytes = 0;
+      for (const key of keys) {
+        const bvid = key.split(':')[1];
+        if (bvid) videos.add(bvid);
+        bytes += new Blob([JSON.stringify(all[key])]).size;
+      }
+      sendResponse({ ok: true, videos: videos.size, entries: keys.length, bytes });
+    })().catch(error =>
+      sendResponse({ ok: false, message: error instanceof Error ? error.message : '统计失败' }),
+    );
+    return true;
+  }
+
+  if (message?.type === 'cache:clear-all') {
+    void (async () => {
+      const all = await chrome.storage.local.get(null);
+      const keys = Object.keys(all).filter(key => CACHE_KEY_PREFIXES.some(it => key.startsWith(it)));
+      if (keys.length > 0) await chrome.storage.local.remove(keys);
+      sendResponse({ ok: true, cleared: keys.length });
+    })().catch(error =>
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : '清空缓存失败',
       }),
     );
     return true;

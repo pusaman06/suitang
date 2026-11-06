@@ -161,6 +161,27 @@
         gap: 10px;
         margin-top: 12px;
       }
+      .cache-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 4px;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      #cache-summary {
+        color: #d7dbe8;
+        font-size: 13px;
+      }
+      #cache-status {
+        min-height: 20px;
+        margin: 8px 0 0;
+        color: #8b93a8;
+        font-size: 12px;
+      }
       #balance-status {
         min-height: 20px;
         margin: 8px 0 0;
@@ -322,6 +343,16 @@
           <span id="balance-value">未读取</span>
         </div>
         <p id="balance-status" role="status"></p>
+      </section>
+
+      <section class="cache">
+        <h2>缓存</h2>
+        <p class="hint">看过的视频，问答和字幕只留在浏览器里，方便回头接着问。存进知识库的那份不受这里影响。</p>
+        <div class="cache-row">
+          <span id="cache-summary">统计中…</span>
+          <button id="cache-clear" class="ghost" type="button">清空全部缓存</button>
+        </div>
+        <p id="cache-status" role="status"></p>
       </section>
 
       <section class="diag">

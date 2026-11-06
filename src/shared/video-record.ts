@@ -96,6 +96,9 @@ export function pageStorageKey(bvid: string, p: number, cid?: number): string {
   return `page:${bvid}:${p}:${cid ?? 'nocid'}`;
 }
 
+/** chrome.storage.local 里属于「看视频留下的缓存」的键前缀：问答、字幕、页面记录。 */
+export const CACHE_KEY_PREFIXES = ['qa:', 'sub:', 'page:'];
+
 function nowIso(): string {
   return new Date().toISOString();
 }
