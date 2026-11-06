@@ -156,13 +156,21 @@ export function parseOutlineDetail(text: string, segmentCount: number): OutlineD
 
   const details = new Array<string>(segmentCount).fill('');
   const sections = Array.isArray(raw.sections) ? raw.sections : [];
+  const collected: { index: number; detail: string }[] = [];
   for (const item of sections) {
     if (!item || typeof item !== 'object') continue;
     const section = item as Record<string, unknown>;
     const index = Number(section.index);
     const detail = typeof section.detail === 'string' ? section.detail.trim() : '';
     if (!Number.isInteger(index) || detail === '') continue;
-    const slot = index - 1;
+    collected.push({ index, detail });
+  }
+  // 模型偶尔不听话，从 0 开始编号。整批认得出是 0 基就整体 +1，别把整段说明丢光。
+  const minIndex = collected.length > 0 ? Math.min(...collected.map(item => item.index)) : 1;
+  const maxIndex = collected.length > 0 ? Math.max(...collected.map(item => item.index)) : 0;
+  const shift = minIndex === 0 && maxIndex <= segmentCount - 1 ? 1 : 0;
+  for (const { index, detail } of collected) {
+    const slot = index + shift - 1;
     if (slot < 0 || slot >= segmentCount) continue;
     if (details[slot] === '') details[slot] = detail.slice(0, 200);
   }
