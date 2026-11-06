@@ -1871,6 +1871,16 @@ ensureAsrRefererRule();
 chrome.runtime.onInstalled.addListener(() => ensureAsrRefererRule());
 chrome.runtime.onStartup.addListener(() => ensureAsrRefererRule());
 
+/** 同步队列已删除（落盘改成「存到知识库」按钮触发），清掉历史遗留的 sync:* 键。 */
+void chrome.storage.local
+  .get(null)
+  .then(all => {
+    const stale = Object.keys(all).filter(key => key.startsWith('sync:'));
+    if (stale.length > 0) return chrome.storage.local.remove(stale);
+    return undefined;
+  })
+  .catch(error => log('clean stale sync keys failed', error));
+
 function sendToTab(tabId: number, message: unknown): void {
   chrome.tabs.sendMessage(tabId, message, () => void chrome.runtime.lastError);
 }
