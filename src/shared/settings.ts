@@ -29,8 +29,6 @@ export interface Settings {
   frameEnabled: boolean;
   /** D6 本地 companion 地址；末尾不带斜杠。 */
   companionUrl: string;
-  /** D6 是否开启本地落盘同步。 */
-  syncEnabled: boolean;
   /** D8 语音转写 Key（SiliconFlow）。 */
   asrApiKey: string;
   /** D8 语音转写服务地址；末尾不带斜杠。 */
@@ -53,7 +51,6 @@ export const DEFAULT_SETTINGS: Settings = {
   jumpAutoPlay: false,
   frameEnabled: true,
   companionUrl: DEFAULT_COMPANION_URL,
-  syncEnabled: false,
   asrApiKey: '',
   asrBaseUrl: DEFAULT_ASR_BASE_URL,
   asrModel: DEFAULT_ASR_MODEL,
@@ -121,9 +118,8 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
     jumpAutoPlay: typeof saved.jumpAutoPlay === 'boolean' ? saved.jumpAutoPlay : DEFAULT_SETTINGS.jumpAutoPlay,
     // D4 新增：旧存档没有这个字段时按默认开启处理。
     frameEnabled: typeof saved.frameEnabled === 'boolean' ? saved.frameEnabled : DEFAULT_SETTINGS.frameEnabled,
-    // D6 新增：旧存档缺省指向本机默认端口，并默认开启同步。
+    // D6 新增：旧存档缺省指向本机默认端口。
     companionUrl: normalizeCompanionUrl(saved.companionUrl),
-    syncEnabled: typeof saved.syncEnabled === 'boolean' ? saved.syncEnabled : DEFAULT_SETTINGS.syncEnabled,
     // D8 新增：转写功能默认关闭（没有 Key），地址/模型缺省用 SiliconFlow。
     asrApiKey: typeof saved.asrApiKey === 'string' ? saved.asrApiKey.trim() : DEFAULT_SETTINGS.asrApiKey,
     asrBaseUrl: normalizeHttpUrl(saved.asrBaseUrl, DEFAULT_SETTINGS.asrBaseUrl),

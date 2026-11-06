@@ -19,6 +19,8 @@ const DEFAULT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 /** 个人知识库根目录；笔记统一落 <kb>/20-知识笔记/。 */
 const DEFAULT_KB_DIR = path.resolve('D:/knowledge-base');
 const KB_NOTE_SUBDIR = '20-知识笔记';
+/** 原文底稿目录：插件把它排除在索引之外，只能从索引卡的链接点进来。 */
+const KB_SOURCE_SUBDIR = '50-底稿/视频原文';
 /** 文件名白名单：中文、字母数字、空格和几个常见标点，杜绝路径穿越。 */
 /** 文件名规则：只排除 Windows 真正不允许的字符，中文标点（问号、冒号、书名号）都放行。 */
 function isValidKbFileName(name) {
@@ -429,6 +431,55 @@ async function handle(req, res, videosRoot, kbDir, origin) {
     return;
   }
 
+  // 原文底稿：<kb>/50-底稿/视频原文/<BV>/p<NN>.md。不在索引里，只给索引卡链接用。
+  if (req.method === 'POST' && pathname === '/api/kb/source') {
+    const body = await readJsonBody(req);
+    const bvid = typeof body?.bvid === 'string' ? body.bvid.trim() : '';
+    const p = Number(body?.p);
+    const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
+    if (!BVID_RE.test(bvid)) {
+      sendError(res, 400, 'bad-request', 'bvid 不合法', origin);
+      return;
+    }
+    if (!Number.isInteger(p) || p < 1 || p > 10000) {
+      sendError(res, 400, 'bad-request', 'p 必须是 1–10000 的整数', origin);
+      return;
+    }
+    if (markdown.trim() === '') {
+      sendError(res, 400, 'bad-request', 'markdown 不能为空', origin);
+      return;
+    }
+    if (!kbDir) {
+      sendError(res, 500, 'write-failed', '没有配置知识库目录（--kb）', origin);
+      return;
+    }
+    const sourceDir = path.join(kbDir, ...KB_SOURCE_SUBDIR.split('/'), bvid);
+    const fileName = `p${p}.md`;
+    const file = path.join(sourceDir, fileName);
+    let overwrote = false;
+    try {
+      await fs.access(file);
+      overwrote = true;
+    } catch {
+      overwrote = false;
+    }
+    await fs.mkdir(sourceDir, { recursive: true });
+    await writeAtomic(file, `${markdown.trimEnd()}\n`);
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        file,
+        relative: `${KB_SOURCE_SUBDIR}/${bvid}/${fileName}`,
+        bytes: Buffer.byteLength(markdown, 'utf8'),
+        overwrote,
+      },
+      origin,
+    );
+    return;
+  }
+
   const pageMatch = /^\/api\/videos\/([^/]+)\/p\/([^/]+)$/.exec(pathname);
   if (pageMatch) {
     const bvid = decodeParam(pageMatch[1]);
@@ -589,7 +640,6 @@ async function main() {
     const address = server.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;
     console.log(`listening on 127.0.0.1:${actualPort}`);
-    console.log(`data dir: ${dir}`);
     console.log(`kb dir: ${kbDir}`);
   });
 

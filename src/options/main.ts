@@ -25,7 +25,6 @@ const balanceStatus = el<HTMLParagraphElement>('#balance-status');
 const refreshBalance = el<HTMLButtonElement>('#refresh-balance');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
 const companionUrl = el<HTMLInputElement>('#companion-url');
-const syncEnabled = el<HTMLInputElement>('#sync-enabled');
 const save = el<HTMLButtonElement>('#save');
 const status = el<HTMLParagraphElement>('#status');
 const diagPing = el<HTMLButtonElement>('#diag-ping');
@@ -120,7 +119,6 @@ async function init(): Promise<void> {
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
   companionUrl.value =
     settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
-  syncEnabled.checked = settings.syncEnabled;
   renderBudget();
   void loadUsage();
 }
@@ -145,7 +143,6 @@ save.addEventListener('click', () => {
     monthlyBudgetCny: Number(monthlyBudget.value) || 0,
     apiBaseUrl: apiBaseUrl.value.trim(),
     companionUrl: companionUrl.value.trim(),
-    syncEnabled: syncEnabled.checked,
   }).then(next => {
     contextWindow.value = String(next.contextWindowSec);
     maxTokens.value = String(next.maxTokens);

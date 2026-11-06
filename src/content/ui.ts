@@ -21,7 +21,6 @@ import {
 } from '../shared/qa';
 import type { QaRecord } from '../shared/qa-store';
 import { loadSettings, type Settings } from '../shared/settings';
-import type { SyncStatus } from '../shared/sync';
 import type { VideoInfo } from '../shared/types';
 import { getPlaybackTime, getVideoElement, getVisibleVideoRect, seekVideo, setDanmakuHidden } from './page';
 
@@ -84,15 +83,6 @@ export function mountUi(info: VideoInfo): UiHandle {
         </div>
       </section>
       <div class="vt-status">就绪</div>
-      <button class="vt-sync" type="button" title="点击手动重试同步">同步检查中…</button>
-      <div class="vt-sync-confirm" hidden>
-        <span class="vt-sync-confirm-text"></span>
-        <div class="vt-sync-confirm-foot">
-          <button class="vt-sync-retry" type="button">再试一次</button>
-          <button class="vt-sync-clear" type="button">清空</button>
-          <button class="vt-sync-dismiss" type="button">取消</button>
-        </div>
-      </div>
       <button class="vt-usage" type="button" title="点击刷新用量">今日 ≈¥0.00</button>
       <div class="vt-history-head" hidden>
         <button class="vt-clear" type="button">清空记录</button>
@@ -141,12 +131,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const status = must<HTMLElement>(shadow, '.vt-status');
-  const syncLine = must<HTMLButtonElement>(shadow, '.vt-sync');
-  const syncConfirm = must<HTMLElement>(shadow, '.vt-sync-confirm');
-  const syncConfirmText = must<HTMLElement>(shadow, '.vt-sync-confirm-text');
-  const syncRetryButton = must<HTMLButtonElement>(shadow, '.vt-sync-retry');
-  const syncClearButton = must<HTMLButtonElement>(shadow, '.vt-sync-clear');
-  const syncDismissButton = must<HTMLButtonElement>(shadow, '.vt-sync-dismiss');
   const usageLine = must<HTMLButtonElement>(shadow, '.vt-usage');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
   const historyHead = must<HTMLElement>(shadow, '.vt-history-head');
@@ -171,8 +155,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   let askedFrame = false;
   let asking = false;
   let captureTimer = 0;
-  let syncTimer = 0;
-  let syncBusy = false;
 
   const OUTLINE_EMPTY_TEXT = '生成一份大纲，快速了解视频结构。';
   let outline: Outline | null = null;
@@ -224,7 +206,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     answers.append(turn);
   };
 
-  const syncHistoryHead = () => {
+  const refreshHistoryHead = () => {
     historyHead.hidden = answers.querySelector('.vt-turn-history') === null;
   };
 
@@ -241,7 +223,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       if (response?.ok) {
         for (const record of response.records ?? []) renderHistoryTurn(record);
       }
-      syncHistoryHead();
+      refreshHistoryHead();
     } catch {
       // 读历史失败不影响提问。
     }
@@ -254,7 +236,7 @@ export function mountUi(info: VideoInfo): UiHandle {
         clearTimer = 0;
         clearHistory.textContent = '清空记录';
       }, 3000);
-      clearHistory.textContent = '再点一次确认';
+      clearHistory.textContent = '再点一次确认（问答 + 字幕缓存）';
       return;
     }
     window.clearTimeout(clearTimer);
@@ -264,8 +246,8 @@ export function mountUi(info: VideoInfo): UiHandle {
       .sendMessage({ type: 'qa:clear', bvid: currentInfo.bvid, p: currentInfo.p })
       .then(() => {
         answers.querySelectorAll('.vt-turn-history').forEach(node => node.remove());
-        syncHistoryHead();
-        status.textContent = '已清空记录';
+        refreshHistoryHead();
+        status.textContent = '已清空问答和字幕缓存（知识库里的那份不受影响）';
       })
       .catch(() => {
         status.textContent = '清空失败，稍后再试';
@@ -275,6 +257,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   /** 「存到知识库」：先拉问答记录 → 让 background 拼草稿 → 面板里可改 → 确认才写盘。 */
   let kbBusy = false;
   let kbFileName = '';
+  /** 原文底稿（字幕 + 大纲 + 问答），确认时和索引卡一起写进知识库。 */
+  let kbSourceMarkdown = '';
 
   const draftKb = async (): Promise<void> => {
     if (kbBusy) return;
@@ -297,17 +281,25 @@ export function mountUi(info: VideoInfo): UiHandle {
         segments: outline?.segments ?? [],
         qa,
       })) as
-        | { ok?: boolean; fileName?: string; markdown?: string; usedModel?: boolean; message?: string }
+        | {
+            ok?: boolean;
+            fileName?: string;
+            markdown?: string;
+            sourceMarkdown?: string;
+            usedModel?: boolean;
+            message?: string;
+          }
         | undefined;
       if (!response?.ok) {
         status.textContent = response?.message ?? '生成笔记草稿失败';
         return;
       }
       kbFileName = response.fileName ?? '';
+      kbSourceMarkdown = response.sourceMarkdown ?? '';
       kbPreview.value = response.markdown ?? '';
       kbHint.textContent = response.usedModel
-        ? `${kbFileName} · 摘要由模型生成，可直接改`
-        : `${kbFileName} · 没配 API Key，只有资料没有摘要`;
+        ? `${kbFileName} · 摘要由模型生成，可直接改；字幕原文一并存入 50-底稿`
+        : `${kbFileName} · 没配 API Key，只有资料没有摘要；字幕原文一并存入 50-底稿`;
       kbBox.hidden = false;
       kbBox.scrollIntoView({ block: 'start' });
       kbPreview.focus();
@@ -331,6 +323,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     kbBox.hidden = true;
     kbPreview.value = '';
     kbFileName = '';
+    kbSourceMarkdown = '';
   });
 
   kbConfirm.addEventListener('click', () => {
@@ -343,10 +336,17 @@ export function mountUi(info: VideoInfo): UiHandle {
     kbConfirm.disabled = true;
     kbConfirm.textContent = '写入中…';
     void chrome.runtime
-      .sendMessage({ type: 'kb:save', fileName: kbFileName, markdown: kbPreview.value })
+      .sendMessage({
+        type: 'kb:save',
+        fileName: kbFileName,
+        markdown: kbPreview.value,
+        sourceMarkdown: kbSourceMarkdown,
+        bvid: currentInfo.bvid,
+        p: currentInfo.p,
+      })
       .then(response => {
         const result = response as
-          | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
+          | { ok?: boolean; relative?: string; overwrote?: boolean; source?: string; message?: string }
           | undefined;
         if (!result?.ok) {
           kbHint.textContent = result?.message ?? '写入失败';
@@ -354,7 +354,9 @@ export function mountUi(info: VideoInfo): UiHandle {
         }
         kbBox.hidden = true;
         kbPreview.value = '';
-        status.textContent = `${result.overwrote ? '已覆盖' : '已存入'} ${result.relative}（约 8 秒后可搜到）`;
+        kbSourceMarkdown = '';
+        const sourceTail = result.source ? `；原文存到 ${result.source}` : '';
+        status.textContent = `${result.overwrote ? '已覆盖' : '已存入'} ${result.relative}${sourceTail}（约 8 秒后可搜到）`;
       })
       .catch(error => {
         kbHint.textContent = error instanceof Error ? error.message : '写入失败';
@@ -395,11 +397,8 @@ export function mountUi(info: VideoInfo): UiHandle {
       // 面板打开只读缓存，不自动生成；用户点「生成大纲」才发请求。
       void loadOutline();
       void loadQaHistory();
-      void refreshSync();
       void refreshUsage();
-      startSyncPolling();
     } else {
-      stopSyncPolling();
     }
   };
 
@@ -413,7 +412,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   });
   close.addEventListener('click', () => {
     panel.hidden = true;
-    stopSyncPolling();
   });
 
   const setFrameHint = (text: string) => {
@@ -421,115 +419,6 @@ export function mountUi(info: VideoInfo): UiHandle {
     frameHint.hidden = text === '';
   };
 
-  /** 最近一次同步状态；点那行字时要用它判断是「重试」还是「确认清空」。 */
-  let lastSync: SyncStatus | null = null;
-
-  /** D6 同步状态：只显示一行小字，失败不打断问答。 */
-  const renderSyncStatus = (next: SyncStatus) => {
-    lastSync = next;
-    if (next.failed === 0) syncConfirm.hidden = true;
-    syncLine.classList.remove('vt-sync-error');
-    if (!next.enabled) {
-      syncLine.textContent = '同步已关闭';
-      syncLine.title = '在设置页开启本地落盘同步';
-      return;
-    }
-    if (next.pending > 0) {
-      syncLine.textContent = `待同步 ${next.pending} 条`;
-      syncLine.title = '点击手动重试同步';
-      return;
-    }
-    if (next.failed > 0) {
-      syncLine.textContent = `同步失败 ${next.failed} 条`;
-      syncLine.title = '点击重试；仍然失败请检查 companion';
-      syncLine.classList.add('vt-sync-error');
-      return;
-    }
-    if (next.lastError) {
-      syncLine.textContent = 'companion 未连接';
-      syncLine.title = `${next.lastError}；点击重试`;
-      syncLine.classList.add('vt-sync-error');
-      return;
-    }
-    syncLine.textContent = '已同步';
-    syncLine.title = next.url;
-  };
-
-  const refreshSync = async () => {
-    try {
-      const response = (await chrome.runtime.sendMessage({ type: 'sync:status' })) as
-        | SyncStatus
-        | undefined;
-      if (response) renderSyncStatus(response);
-    } catch {
-      syncLine.textContent = '同步状态未知';
-      syncLine.classList.add('vt-sync-error');
-    }
-  };
-
-  const stopSyncPolling = () => {
-    if (syncTimer !== 0) {
-      window.clearInterval(syncTimer);
-      syncTimer = 0;
-    }
-  };
-
-  const startSyncPolling = () => {
-    stopSyncPolling();
-    syncTimer = window.setInterval(() => {
-      if (!panel.hidden) void refreshSync();
-    }, 5000);
-  };
-
-  const flushSync = () => {
-    if (syncBusy) return;
-    syncBusy = true;
-    syncConfirm.hidden = true;
-    syncLine.textContent = '同步中…';
-    void chrome.runtime
-      .sendMessage({ type: 'sync:flush' })
-      .then(() => refreshSync())
-      .catch(() => {
-        syncLine.textContent = '同步失败';
-        syncLine.classList.add('vt-sync-error');
-      })
-      .finally(() => {
-        syncBusy = false;
-      });
-  };
-
-  const clearSyncFailed = () => {
-    if (syncBusy) return;
-    syncBusy = true;
-    syncConfirm.hidden = true;
-    syncLine.textContent = '清空中…';
-    void chrome.runtime
-      .sendMessage({ type: 'sync:clear-failed' })
-      .then(() => refreshSync())
-      .catch(() => {
-        syncLine.textContent = '清空失败';
-        syncLine.classList.add('vt-sync-error');
-      })
-      .finally(() => {
-        syncBusy = false;
-      });
-  };
-
-  syncLine.addEventListener('click', () => {
-    // 有失败记录时先问清楚：是要再试一次，还是直接清掉。
-    if (lastSync && lastSync.failed > 0) {
-      syncConfirmText.textContent = `共 ${lastSync.failed} 条同步记录重复失败，可能已经没用了。`;
-      syncConfirm.hidden = false;
-      return;
-    }
-    flushSync();
-  });
-
-  syncRetryButton.addEventListener('click', flushSync);
-  syncClearButton.addEventListener('click', clearSyncFailed);
-  syncDismissButton.addEventListener('click', () => {
-    syncConfirm.hidden = true;
-  });
 
   /** D10 用量：只显示今日/本月，失败保持上一次的值，不打断输入。 */
   const renderUsage = (ledger: UsageLedger) => {
@@ -584,7 +473,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   document.addEventListener('play', onPlayPause, true);
   document.addEventListener('pause', onPlayPause, true);
   syncPaused();
-  const initialSync = window.setTimeout(syncPaused, 1200);
+  const initialPausedCheck = window.setTimeout(syncPaused, 1200);
 
   /* -------- D5 大纲 -------- */
 
@@ -973,7 +862,6 @@ export function mountUi(info: VideoInfo): UiHandle {
       clearOutlineError();
       outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
       renderOutline();
-      window.setTimeout(() => void refreshSync(), 600);
     } catch (error) {
       if (run !== outlineRunToken || outlineInfoKey(currentInfo) !== key) return;
       fail(`大纲生成失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1313,7 +1201,6 @@ export function mountUi(info: VideoInfo): UiHandle {
         historyHead.hidden = false;
         // 入队/flush 是后台异步的，稍等再看状态。
         window.setTimeout(() => {
-          void refreshSync();
           void refreshUsage();
         }, 600);
         return;
@@ -1470,7 +1357,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       panel.hidden = true;
-      stopSyncPolling();
     }
   };
   document.addEventListener('keydown', onKeyDown);
@@ -1596,10 +1482,9 @@ export function mountUi(info: VideoInfo): UiHandle {
       document.removeEventListener('timeupdate', onOutlineTimeupdate, true);
       document.removeEventListener('seeked', onOutlineSeeked, true);
       chrome.runtime.onMessage.removeListener(onAsrMessage);
-      stopSyncPolling();
-      window.clearTimeout(initialSync);
       if (captureTimer !== 0) window.clearTimeout(captureTimer);
       if (paintTimer !== 0) window.clearTimeout(paintTimer);
+      window.clearTimeout(initialPausedCheck);
       if (port) {
         port.disconnect();
         port = null;

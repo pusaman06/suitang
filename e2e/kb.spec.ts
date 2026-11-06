@@ -178,4 +178,44 @@ test.describe('companion 知识库路由', () => {
     });
     expect(response.ok).toBe(false);
   });
+
+  test('原文底稿写进 50-底稿/视频原文/<BV>/p1.md', async () => {
+    const response = await fetch(`${base}/api/kb/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bvid: 'BV1sHU9BmEne',
+        p: 1,
+        markdown: '# 原文\n\n**[00:12]** 第一句话\n',
+      }),
+    });
+    const data = (await response.json()) as { ok?: boolean; relative?: string; bytes?: number };
+    expect(data.ok).toBe(true);
+    expect(data.relative).toBe('50-底稿/视频原文/BV1sHU9BmEne/p1.md');
+    const file = join(kbDir, '50-底稿', '视频原文', 'BV1sHU9BmEne', 'p1.md');
+    expect(readFileSync(file, 'utf8')).toContain('第一句话');
+  });
+
+  test('原文接口拒绝非法 bvid 和空正文', async () => {
+    const badBvid = await fetch(`${base}/api/kb/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvid: 'not-a-bvid', p: 1, markdown: 'x' }),
+    });
+    expect(badBvid.ok).toBe(false);
+
+    const badP = await fetch(`${base}/api/kb/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvid: 'BV1sHU9BmEne', p: 0, markdown: 'x' }),
+    });
+    expect(badP.ok).toBe(false);
+
+    const empty = await fetch(`${base}/api/kb/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvid: 'BV1sHU9BmEne', p: 1, markdown: '   ' }),
+    });
+    expect(empty.ok).toBe(false);
+  });
 });

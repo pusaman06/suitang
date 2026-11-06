@@ -1,8 +1,24 @@
 import type { OutlineSegment } from './outline';
 import type { VideoInfo } from './types';
+import type { CompanionPage } from './video-record';
 
 /** 个人知识库的落库规则，见 D:\knowledge-base\_模板\视频笔记.md。 */
 export const KB_NOTE_SUBDIR = '20-知识笔记';
+
+/**
+ * 原文底稿目录。插件把 `50-底稿` 硬编码进索引排除列表，所以放这里的 md
+ * 既不会被搜到、也不报缺陷，只能从索引卡的链接点进来。
+ */
+export const KB_SOURCE_SUBDIR = '50-底稿/视频原文';
+
+export const DEFAULT_KB_DIR = 'D:\\knowledge-base';
+
+/** 原文底稿的绝对路径，写进索引卡的「原文」一节。 */
+export function kbSourcePath(bvid: string, p: number, kbDir: string = DEFAULT_KB_DIR): string {
+  const root = kbDir.replace(/[\\/]+$/, '');
+  const pp = String(p).padStart(2, '0');
+  return `${root}\\${KB_SOURCE_SUBDIR.replace(/\//g, '\\')}\\${bvid}\\p${pp}.md`;
+}
 
 export interface KbQaPair {
   question: string;
@@ -16,6 +32,8 @@ export interface KbNoteInput {
   summary: string;
   keywords: string[];
   now?: Date;
+  /** 知识库根目录；不传就用默认值，只影响「原文」里写的绝对路径。 */
+  kbDir?: string;
 }
 
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -124,8 +142,7 @@ export function buildKbMarkdown(input: KbNoteInput): string {
 
   lines.push('## 原文');
   lines.push('');
-  const p = String(info.p).padStart(2, '0');
-  lines.push(`- 字幕全文：\`D:\\project\\video-tutor\\data\\videos\\${info.bvid}\\p${p}.md\``);
+  lines.push(`- 字幕全文：\`${kbSourcePath(info.bvid, info.p, input.kbDir)}\``);
   lines.push('');
 
   // 只在真的问过时才写这一段：没问过就整段不要，也不留空标题。
@@ -136,6 +153,58 @@ export function buildKbMarkdown(input: KbNoteInput): string {
       lines.push(`**Q**：${item.question.trim()}`);
       lines.push('');
       lines.push(`A：${item.answer.trim()}`);
+      lines.push('');
+    }
+  }
+
+  return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+}
+
+/**
+ * 原文底稿：字幕全文 + 大纲 + 问答，落到 `50-底稿/视频原文/<BV>/p<NN>.md`。
+ * 故意不写 frontmatter——它在插件的排除目录里，本来就不该进索引。
+ */
+export function buildKbSourceMarkdown(page: CompanionPage, now: Date = new Date()): string {
+  const title = page.partTitle || page.title || `P${page.p}`;
+  const lines: string[] = [];
+
+  lines.push(`# ${title}`, '');
+  lines.push('## 基本信息', '');
+  if (page.owner) lines.push(`- UP：${page.owner}`);
+  if (page.duration && page.duration > 0) lines.push(`- 时长：${formatClock(page.duration)}`);
+  const part =
+    page.pageCount && page.pageCount > 1
+      ? `第 ${page.p} P / 共 ${page.pageCount} P`
+      : `第 ${page.p} P`;
+  lines.push(`- ${part}`);
+  lines.push(`- 链接：https://www.bilibili.com/video/${page.bvid}/?p=${page.p}`);
+  lines.push(`- 入库：${localDate(now)}`);
+  lines.push('');
+
+  const segments = page.outline ?? [];
+  if (segments.length > 0) {
+    lines.push('## 大纲', '');
+    for (const segment of segments) {
+      lines.push(`- [${formatClock(segment.start)}] ${segment.title}`);
+    }
+    lines.push('');
+  }
+
+  const cues = page.subtitle?.segments ?? [];
+  if (cues.length > 0) {
+    lines.push('## 字幕', '');
+    for (const cue of cues) {
+      lines.push(`**[${formatClock(cue.from)}]** ${cue.text.trim()}`, '');
+    }
+  }
+
+  const qa = page.qa ?? [];
+  if (qa.length > 0) {
+    lines.push('## 问答', '');
+    for (const item of qa) {
+      lines.push(`**Q（[${formatClock(item.at)}]）** ${item.q.trim()}`);
+      lines.push('');
+      lines.push(`A：${item.a.trim()}`);
       lines.push('');
     }
   }

@@ -148,7 +148,7 @@ test('刷新后历史还在，清空后消失', async () => {
 
   // 第一次点变成确认态，第二次才真的清。
   await page.locator('.vt-clear').click();
-  await expect(page.locator('.vt-clear')).toHaveText('再点一次确认');
+  await expect(page.locator('.vt-clear')).toContainText('再点一次确认');
   await page.locator('.vt-clear').click();
   await expect(page.locator('.vt-turn-history')).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator('.vt-clear')).toBeHidden();

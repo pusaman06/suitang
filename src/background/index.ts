@@ -24,26 +24,23 @@ import {
 } from '../shared/outline';
 import {
   buildKbMarkdown,
+  buildKbSourceMarkdown,
   buildKbSummaryPrompt,
+  DEFAULT_KB_DIR,
   kbFileName,
   parseKbSummary,
   type KbQaPair,
 } from '../shared/kb';
 import { extractCitationSeconds } from '../shared/citations';
 import {
-  buildCoursePayload,
   buildPagePayload,
-  clearFailed,
-  enqueueAndFlush,
-  flushQueue,
-  getSyncStatus,
+  pageStorageKey,
   readPageRecord,
-  retryFailed,
   writePageRecord,
-  SYNC_ALARM_NAME,
+  type CompanionPage,
   type CompanionQa,
   type PagePayloadInput,
-} from '../shared/sync';
+} from '../shared/video-record';
 import {
   QA_PORT_NAME,
   type QaAskPayload,
@@ -560,9 +557,7 @@ async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue
   return asr ? asrCues(asr) : [];
 }
 
-/* ------------------------- D6：本地落盘同步 ------------------------- */
-
-const syncedCourses = new Set<string>();
+/* ------------------------- 分 P 快照（chrome.storage 缓存） ------------------------- */
 
 async function cachedSubtitleLang(
   bvid: string,
@@ -597,12 +592,6 @@ async function syncPageSnapshot(input: PagePayloadInput): Promise<void> {
     marks: input.marks ?? existing?.marks,
   });
   await writePageRecord(page);
-  await enqueueAndFlush({
-    kind: 'page',
-    bvid: page.bvid,
-    p: page.p,
-    payload: page,
-  });
 }
 
 async function syncQaPage(payload: QaAskPayload, cues: SubtitleCue[], answer: string): Promise<void> {
@@ -627,16 +616,6 @@ async function syncQaPage(payload: QaAskPayload, cues: SubtitleCue[], answer: st
     cues,
     qa,
   });
-}
-
-function queueCourseOnce(meta: VideoMeta): void {
-  if (syncedCourses.has(meta.bvid)) return;
-  syncedCourses.add(meta.bvid);
-  void enqueueAndFlush({
-    kind: 'course',
-    bvid: meta.bvid,
-    payload: buildCoursePayload(meta),
-  }).catch(error => log('course sync enqueue failed', error));
 }
 
 /* ------------------------- D5：大纲 ------------------------- */
@@ -853,8 +832,21 @@ function readKbQa(value: unknown): KbQaPair[] {
   return out;
 }
 
-function readCaptureRect(value: unknown): QaRect | null {
-  if (!value || typeof value !== 'object') return null;
+/** 问 companion 知识库根目录在哪；连不上就退化成默认值。 */
+async function readKbDir(): Promise<string> {
+  try {
+    const settings = await loadSettings();
+    const base = settings.companionUrl.replace(/\/+$/, '');
+    const response = await fetch(`${base}/api/kb/status`);
+    if (!response.ok) return DEFAULT_KB_DIR;
+    const data = (await response.json()) as { kbDir?: string };
+    return typeof data?.kbDir === 'string' && data.kbDir !== '' ? data.kbDir : DEFAULT_KB_DIR;
+  } catch {
+    return DEFAULT_KB_DIR;
+  }
+}
+
+function readCaptureRect(value: unknown): QaRect | null {  if (!value || typeof value !== 'object') return null;
   const rect = value as Partial<QaRect>;
   if (
     typeof rect.x !== 'number' ||
@@ -1428,7 +1420,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'video-meta' && typeof message.bvid === 'string') {
     const cached = metaCache.get(message.bvid);
     if (cached) {
-      queueCourseOnce(cached);
       sendResponse(cached);
       return false;
     }
@@ -1440,7 +1431,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     void readVideoMeta(tabId).then(meta => {
-      if (meta) queueCourseOnce(meta);
       sendResponse(meta);
     });
     return true;
@@ -1509,14 +1499,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, message: '缺少 bvid/p' });
       return false;
     }
-    void clearQaStore(bvid, p)
-      .then(() => sendResponse({ ok: true }))
-      .catch(error =>
-        sendResponse({
-          ok: false,
-          message: error instanceof Error ? error.message : '清空问答记录失败',
-        }),
+    void (async () => {
+      await clearQaStore(bvid, p);
+      // 用户定的语义：没存进知识库的东西就是随口一问，清就一起清干净。
+      // 所以连带清掉这期的 page record 和字幕缓存，别留半截。
+      await chrome.storage.local.remove(pageStorageKey(bvid, p));
+      const prefix = `sub:${bvid}:${p}:`;
+      const keys = Object.keys(await chrome.storage.local.get(null)).filter(key =>
+        key.startsWith(prefix),
       );
+      if (keys.length > 0) await chrome.storage.local.remove(keys);
+      sendResponse({ ok: true });
+    })().catch(error =>
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : '清空问答记录失败',
+      }),
+    );
     return true;
   }
 
@@ -1558,10 +1557,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       const now = new Date();
+      // 原文底稿：优先用分 P 快照里的字幕/大纲/问答；没快照就用面板传上来的补。
+      const page = await readPageRecord(info.bvid, info.p);
+      const merged: CompanionPage = {
+        ...(page ?? { schema: 1, bvid: info.bvid, p: info.p, updatedAt: now.toISOString() }),
+        title: info.title,
+        updatedAt: now.toISOString(),
+      };
+      if (info.owner) merged.owner = info.owner;
+      if (info.duration) merged.duration = info.duration;
+      if (info.pageCount) merged.pageCount = info.pageCount;
+      if (!merged.outline || merged.outline.length === 0) {
+        if (segments.length > 0) merged.outline = segments;
+      }
+      if (!merged.qa || merged.qa.length === 0) {
+        if (qa.length > 0) {
+          merged.qa = qa.map((item, index) => ({
+            at: 0,
+            q: item.question,
+            a: item.answer,
+            citations: [],
+            createdAt: new Date(now.getTime() + index).toISOString(),
+          }));
+        }
+      }
       sendResponse({
         ok: true,
         fileName: kbFileName({ title: info.title, bvid: info.bvid, now }),
-        markdown: buildKbMarkdown({ info, segments, qa, summary, keywords, now }),
+        markdown: buildKbMarkdown({
+          info,
+          segments,
+          qa,
+          summary,
+          keywords,
+          now,
+          kbDir: await readKbDir(),
+        }),
+        sourceMarkdown: buildKbSourceMarkdown(merged, now),
         usedModel,
       });
     })().catch(error =>
@@ -1573,10 +1605,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 「存到知识库」第二步：交给本地 companion 写进 <kb>/20-知识笔记/。
+  // 「存到知识库」第二步：先写原文底稿（50-底稿/视频原文），再写索引卡（20-知识笔记）。
   if (message?.type === 'kb:save') {
     const fileName = typeof message.fileName === 'string' ? message.fileName.trim() : '';
     const markdown = typeof message.markdown === 'string' ? message.markdown : '';
+    const sourceMarkdown =
+      typeof message.sourceMarkdown === 'string' ? message.sourceMarkdown : '';
+    const bvid = typeof message.bvid === 'string' ? message.bvid.trim() : '';
+    const p = Number(message.p);
     if (fileName === '' || markdown.trim() === '') {
       sendResponse({ ok: false, message: '没有可保存的内容' });
       return false;
@@ -1584,18 +1620,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void (async () => {
       const settings = await loadSettings();
       const base = settings.companionUrl.replace(/\/+$/, '');
-      const response = await fetch(`${base}/api/kb/note`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ fileName, markdown }),
-      });
-      const data = (await response.json().catch(() => null)) as
-        | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
-        | null;
-      if (!response.ok || !data?.ok) {
-        throw new Error(data?.message ?? `companion 返回 HTTP ${response.status}`);
+      const post = async (route: string, body: unknown) => {
+        const response = await fetch(`${base}${route}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify(body),
+        });
+        const data = (await response.json().catch(() => null)) as
+          | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
+          | null;
+        if (!response.ok || !data?.ok) {
+          throw new Error(data?.message ?? `companion 返回 HTTP ${response.status}`);
+        }
+        return data;
+      };
+
+      let source: string | undefined;
+      if (sourceMarkdown.trim() !== '' && bvid !== '' && Number.isInteger(p) && p > 0) {
+        const saved = await post('/api/kb/source', { bvid, p, markdown: sourceMarkdown });
+        source = saved.relative;
       }
-      sendResponse({ ok: true, relative: data.relative ?? fileName, overwrote: data.overwrote === true });
+      const data = await post('/api/kb/note', { fileName, markdown });
+      sendResponse({
+        ok: true,
+        relative: data.relative ?? fileName,
+        overwrote: data.overwrote === true,
+        source,
+      });
     })().catch(error =>
       sendResponse({
         ok: false,
@@ -1789,50 +1840,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'sync:status') {
-    void getSyncStatus()
-      .then(status => sendResponse(status))
-      .catch(error =>
-        sendResponse({
-          enabled: false,
-          url: '',
-          pending: 0,
-          failed: 0,
-          lastError: error instanceof Error ? error.message : '读取同步状态失败',
-        }),
-      );
-    return true;
-  }
-
-  if (message?.type === 'sync:flush') {
-    // 用户手动点「同步失败 N 条」：先把它放回队列，再走正常 flush。
-    void retryFailed()
-      .catch(() => 0)
-      .then(() => flushQueue())
-      .then(status => sendResponse({ ok: true, status }))
-      .catch(error =>
-        sendResponse({
-          ok: false,
-          message: error instanceof Error ? error.message : '同步失败',
-        }),
-      );
-    return true;
-  }
-
-  if (message?.type === 'sync:clear-failed') {
-    void clearFailed()
-      .then(count =>
-        getSyncStatus().then(status => sendResponse({ ok: true, cleared: count, status })),
-      )
-      .catch(error =>
-        sendResponse({
-          ok: false,
-          message: error instanceof Error ? error.message : '清空失败队列失败',
-        }),
-      );
-    return true;
-  }
-
   return false;
 });
 
@@ -1863,17 +1870,6 @@ function ensureAsrRefererRule(): void {
 ensureAsrRefererRule();
 chrome.runtime.onInstalled.addListener(() => ensureAsrRefererRule());
 chrome.runtime.onStartup.addListener(() => ensureAsrRefererRule());
-
-chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name !== SYNC_ALARM_NAME) return;
-  void flushQueue().catch(error => log('sync alarm flush failed', error));
-});
-chrome.runtime.onStartup.addListener(() => {
-  void flushQueue().catch(error => log('sync startup flush failed', error));
-});
-// service worker 每次唤醒也补一次；失败只记录，不打扰页面。
-void flushQueue().catch(error => log('sync initial flush failed', error));
 
 function sendToTab(tabId: number, message: unknown): void {
   chrome.tabs.sendMessage(tabId, message, () => void chrome.runtime.lastError);

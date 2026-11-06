@@ -21,7 +21,7 @@ test.afterAll(async () => {
  */
 test('面板上有「存到知识库」，点了出可编辑预览', async () => {
   await clearStorage(context, extensionId);
-  await writeSettings(context, extensionId, { apiKey: '', syncEnabled: false });
+  await writeSettings(context, extensionId, { apiKey: '' });
 
   const page: Page = await context.newPage();
   await page.goto(VIDEO_URL, { waitUntil: 'domcontentloaded' });
