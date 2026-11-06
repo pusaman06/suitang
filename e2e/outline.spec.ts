@@ -228,7 +228,8 @@ test('点生成后出现分段，点第 2 段跳到该段起点；再次打开�
   const before = mock.requests.length;
   await page.locator('.vt-outline-generate').click();
   await expect(page.locator('.vt-outline-state')).toHaveText('9 段', { timeout: 30_000 });
-  expect(mock.requests.length).toBe(before + 1);
+  // 两次调用：先切段，再单独一次写「每章讲了什么 + 核心结论」（D16/D18）。
+  expect(mock.requests.length).toBe(before + 2);
 
   const items = page.locator('.vt-outline-item');
   await expect(items).toHaveCount(9);
@@ -281,7 +282,8 @@ test('点重新生成会再请求一次，并用新结果替换旧大纲', async
   await expect(page.locator('.vt-outline-item').first()).toContainText('新分段 1', {
     timeout: 30_000,
   });
-  expect(mock.requests.length).toBe(before + 1);
+  // 同第一条：切段 + 内容说明，两次调用。
+  expect(mock.requests.length).toBe(before + 2);
 });
 
 test('围栏 + 乱序 + 重叠的坏格式仍渲染成有序不重叠的分段', async () => {

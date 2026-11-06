@@ -1,12 +1,17 @@
 import type { SubtitleCue } from './types';
 
 /** 大纲缓存格式版本；结构不兼容时直接丢弃旧缓存。 */
-export const OUTLINE_SCHEMA = 1;
+export const OUTLINE_SCHEMA = 2;
+
+/** 这一段字幕从哪来：影响时间戳是否可信（ASR 的是估算值）。 */
+export type OutlineCaption = 'subtitle' | 'asr' | 'chapters' | 'frames';
 
 export interface OutlineSegment {
   start: number;
   end: number;
   title: string;
+  /** 这一段讲了哪些事（1–2 句）。只有拿到字幕时才有。 */
+  detail?: string;
 }
 
 export interface Outline {
@@ -15,6 +20,10 @@ export interface Outline {
   cid?: number;
   duration: number;
   segments: OutlineSegment[];
+  /** 整片的核心结论（3–5 条）。没有字幕时为空。 */
+  conclusions?: string[];
+  /** 时间戳来源；缺省按 subtitle 处理（老数据都是官方字幕）。 */
+  captions?: OutlineCaption;
   createdAt: number;
   model: string;
 }
@@ -106,19 +115,23 @@ export function mergeCuesByWindow(cues: SubtitleCue[], windowSec: number): Outli
  */
 export function compactCuesForOutline(
   cues: SubtitleCue[],
-  maxChars = 14000,
+  maxChars = 36000,
 ): OutlineLine[] {
   const lines = mergeCuesByWindow(cues, 15);
-  const budget = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 1;
-  const total = lines.reduce((sum, line) => sum + line.text.length, 0);
-  if (total <= budget) return lines;
+  const budget = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 0;
+  if (budget === 0) return lines;
 
-  const step = Math.ceil(total / budget);
-  const picked = lines.filter((_, index) => index % step === 0);
-  // 抽稀不能把最后一行丢掉：末段要靠它补到片尾，否则大纲尾部会缺一块。
-  const tail = lines[lines.length - 1];
-  if (picked[picked.length - 1] !== tail) picked.push(tail);
-  return picked;
+  // 不再等间隔抽稀：抽稀会让模型看不到完整上下文，切出来的段边界和内容说明都会失真。
+  // 超预算就从尾部截断（Bilitato 也是这么做的，见 decisions-notes.md D15）。
+  const kept: OutlineLine[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const cost = line.text.length + 1;
+    if (used + cost > budget && kept.length > 0) break;
+    kept.push(line);
+    used += cost;
+  }
+  return kept;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -139,6 +152,19 @@ export function toSeconds(value: unknown): number {
   return Number(match[1] ?? 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
 }
 
+/** 行号解析：接受 `12` / `'12'` / `'#12'`，非负整数才认，其余返回 null。 */
+export function toLineIndex(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    const index = Math.round(value);
+    return index >= 0 ? index : null;
+  }
+  if (typeof value !== 'string') return null;
+  const match = /^#?\s*(\d+)$/.exec(value.trim());
+  if (!match) return null;
+  return Number(match[1]);
+}
+
 /**
  * 解析模型返回的大纲 JSON，并做边界、排序、去重叠、首尾覆盖和段数校验。
  * 输出不合格时返回 null，让调用方提示用户重试，不硬凑段数。
@@ -147,6 +173,7 @@ export function parseOutline(
   text: string,
   duration: number,
   range: OutlineRange,
+  lines?: OutlineLine[],
 ): OutlineSegment[] | null {
   const source = String(text).replace(/```(?:json)?/gi, '').trim();
   const first = source.indexOf('[');
@@ -163,14 +190,33 @@ export function parseOutline(
 
   const limit = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const candidates: OutlineSegment[] = [];
+  const usableLines = lines && lines.length > 0 ? lines : null;
 
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue;
     const raw = item as Record<string, unknown>;
-    const start = toSeconds(raw.start);
-    const end = toSeconds(raw.end);
     const title = typeof raw.title === 'string' ? raw.title.trim() : String(raw.title ?? '').trim();
-    if (!Number.isFinite(start) || !Number.isFinite(end) || title === '' || start >= end) continue;
+    if (title === '') continue;
+
+    // D14：优先按行号反查真实字幕时间；模型给的秒数只当兜底。
+    let start = Number.NaN;
+    let end = Number.NaN;
+    const startLine = toLineIndex(raw.start_line);
+    const endLine = toLineIndex(raw.end_line);
+    if (usableLines && startLine !== null && endLine !== null) {
+      const from = Math.min(startLine, usableLines.length - 1);
+      const to = Math.min(endLine, usableLines.length - 1);
+      if (to > from) {
+        start = usableLines[from].from;
+        // end_line 是「最后一行」，这一段到下一行开始为止；末行就落到片尾。
+        end = to + 1 < usableLines.length ? usableLines[to + 1].from : limit || usableLines[to].from + 1;
+      }
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      start = toSeconds(raw.start);
+      end = toSeconds(raw.end);
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) continue;
 
     // 先夹到视频时长内；end 至少比 start 晚 1 秒，否则这一项没有意义。
     let safeStart = clamp(start, 0, limit);

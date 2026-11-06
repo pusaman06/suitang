@@ -48,6 +48,12 @@ export interface KbNoteInput {
   qa: KbQaPair[];
   summary: string;
   keywords: string[];
+  /** 整片核心结论（3–5 条）；没有字幕时为空，整段不写。 */
+  conclusions?: string[];
+  /** 时间戳来源：`asr` 时在笔记里注明是估算值（D19）。 */
+  captions?: string;
+  /** 视频没有字幕：核心结论不生成，笔记底部注明原因（D18）。 */
+  noSubtitle?: boolean;
   now?: Date;
   /** 知识库根目录；不传就用默认值，只影响「原文」里写的绝对路径。 */
   kbDir?: string;
@@ -141,13 +147,31 @@ export function buildKbMarkdown(input: KbNoteInput): string {
   lines.push(`- 存入：${localDate(now)}`);
   lines.push('');
 
+  // 核心结论：整片要说什么。没有字幕时不写这段（D18）。
+  const conclusions = (input.conclusions ?? []).map(line => line.trim()).filter(line => line !== '');
+  if (conclusions.length > 0) {
+    lines.push('## 核心结论');
+    lines.push('');
+    for (const line of conclusions) lines.push(`- ${line}`);
+    lines.push('');
+  }
+
   if (segments.length > 0) {
     lines.push('## 大纲');
     lines.push('');
-    for (const segment of segments) {
-      lines.push(`- [${formatClock(segment.start)}] ${segment.title}`);
+    if (input.captions === 'asr') {
+      lines.push('> 时间戳由语音转写按字数估算，可能有几十秒出入。');
+      lines.push('');
     }
-    lines.push('');
+    for (const segment of segments) {
+      lines.push(`### [${formatClock(segment.start)}] ${segment.title}`);
+      lines.push('');
+      const detail = segment.detail?.trim();
+      if (detail) {
+        lines.push(detail);
+        lines.push('');
+      }
+    }
   }
 
   if (input.keywords.length > 0) {
@@ -162,6 +186,11 @@ export function buildKbMarkdown(input: KbNoteInput): string {
   lines.push(`- [字幕全文（${kbSourceFileName(info.bvid, info.p)}）](${kbSourceLink(info.bvid, info.p)})`);
   lines.push(`- 本机路径：\`${kbSourcePath(info.bvid, info.p, input.kbDir)}\``);
   lines.push('');
+
+  if (input.noSubtitle) {
+    lines.push('> 这个视频没有字幕，所以没有核心结论；大纲来自 UP 章节或画面截图。');
+    lines.push('');
+  }
 
   // 只在真的问过时才写这一段：没问过就整段不要，也不留空标题。
   if (qa.length > 0) {

@@ -61,6 +61,10 @@ export function mountUi(info: VideoInfo): UiHandle {
           <span class="vt-outline-state">未生成</span>
         </button>
         <div class="vt-outline-body">
+          <div class="vt-conclusions" hidden>
+            <div class="vt-conclusions-title">核心结论</div>
+            <ul class="vt-conclusions-list"></ul>
+          </div>
           <div class="vt-outline-empty">
             <div class="vt-outline-empty-text">生成一份大纲，快速了解视频结构。</div>
             <div class="vt-outline-actions">
@@ -119,6 +123,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineHead = must<HTMLButtonElement>(shadow, '.vt-outline-head');
   const outlineState = must<HTMLElement>(shadow, '.vt-outline-state');
   const outlineBody = must<HTMLElement>(shadow, '.vt-outline-body');
+  const conclusionsBox = must<HTMLElement>(shadow, '.vt-conclusions');
+  const conclusionsList = must<HTMLUListElement>(shadow, '.vt-conclusions-list');
   const outlineEmpty = must<HTMLElement>(shadow, '.vt-outline-empty');
   const outlineEmptyText = must<HTMLElement>(shadow, '.vt-outline-empty-text');
   const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
@@ -560,6 +566,13 @@ export function mountUi(info: VideoInfo): UiHandle {
       name.textContent = segment.title;
       button.append(time, name);
       item.append(button);
+      const detail = segment.detail?.trim();
+      if (detail) {
+        const note = document.createElement('p');
+        note.className = 'vt-outline-detail';
+        note.textContent = detail;
+        item.append(note);
+      }
       outlineList.append(item);
     });
     outlineList.hidden = false;
@@ -582,6 +595,19 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineList.replaceChildren();
       outlineActiveIndex = -1;
       outlineEmpty.hidden = !outlineError.hidden;
+    }
+    // 核心结论是整片的，放在大纲上方；没有（没字幕，或模型没给）就整块不占位。
+    const conclusions = (outline?.conclusions ?? []).filter(line => line.trim() !== '');
+    conclusionsList.replaceChildren();
+    if (conclusions.length > 0) {
+      for (const line of conclusions) {
+        const item = document.createElement('li');
+        item.textContent = line;
+        conclusionsList.append(item);
+      }
+      conclusionsBox.hidden = false;
+    } else {
+      conclusionsBox.hidden = true;
     }
     outlineFoot.hidden = !outline || outline.segments.length === 0;
     renderOutlineState();

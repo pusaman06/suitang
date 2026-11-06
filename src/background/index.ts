@@ -9,7 +9,12 @@ import type {
 import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
 import { loadSettings, type Settings } from '../shared/settings';
 import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
-import { buildFrameOutlinePrompt, buildOutlinePrompt } from '../shared/outline-prompt';
+import {
+  buildFrameOutlinePrompt,
+  buildOutlineDetailPrompt,
+  buildOutlinePrompt,
+  parseOutlineDetail,
+} from '../shared/outline-prompt';
 import {
   coalesceSegments,
   framesToSegments,
@@ -17,6 +22,7 @@ import {
   parseFrameTitles,
   parseOutline,
   type Outline,
+  type OutlineCaption,
   type OutlineErrorCode,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
@@ -1001,88 +1007,127 @@ async function generateOutline(
     }
 
     let cues: SubtitleCue[] = [];
-    let chapters: OutlineSegment[] = [];
+    let captions: OutlineCaption = 'subtitle';
     try {
       cues = await outlineCues(tabId, request);
     } catch (error) {
       if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
+      // 没有官方字幕：先看有没有缓存过的 ASR（时间戳是估算的，D19 要标注）。
+      const asr = await readAsrResult(request.bvid, request.p, request.cid);
+      if (asr) {
+        cues = asrCues(asr);
+        captions = 'asr';
+      }
+    }
+
+    // D13：UP 章节优先。章节是人手写的目录，边界准、不花钱，比模型切得准。
+    let chapters: OutlineSegment[] = [];
+    try {
       const meta = await readVideoMeta(tabId);
       if (meta?.aid && request.cid) {
         const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
         chapters = chaptersToSegments(points, request.duration);
       }
-      if (chapters.length < 2) {
-        // 第三级兜底优先用已缓存的 ASR；没有缓存才把 no-subtitle 抛回 UI 去抽帧。
-        const asr = await readAsrResult(request.bvid, request.p, request.cid);
-        if (asr) cues = asrCues(asr);
-        else throw error;
-      }
+    } catch (error) {
+      log('view points failed', error);
     }
 
-    // 有 UP 章节就不必调模型：章节本身就是人写好的大纲。
+    let segments: OutlineSegment[];
+    let model: string;
     if (chapters.length >= 2) {
-      const outline: Outline = {
-        bvid: request.bvid,
-        p: request.p,
-        cid: request.cid,
-        duration: request.duration,
-        segments: chapters,
-        createdAt: Date.now(),
-        model: 'bilibili-chapters',
-      };
-      await chrome.storage.local.set({
-        [outlineStorageKey(request.bvid, request.p, request.cid)]: outline,
-      });
-      void syncPageSnapshot({
-        bvid: request.bvid,
-        p: request.p,
-        cid: request.cid,
+      segments = chapters;
+      model = 'bilibili-chapters';
+      captions = 'chapters';
+    } else {
+      if (!settings.apiKey.trim()) {
+        throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
+      }
+      if (cues.length === 0) {
+        throw new OutlineFailure(
+          'no-subtitle',
+          '这个视频没有字幕。先在面板上点「转写这段」，转完再生成大纲',
+        );
+      }
+
+      const prompt = buildOutlinePrompt({
         title: request.title,
         duration: request.duration,
-        cues: [],
-        outline: chapters,
-      }).catch(error => log('outline sync failed', error));
-      return { ok: true, outline };
+        cues,
+      });
+      if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
+
+      let text = '';
+      const startedAt = Date.now();
+      const result = await callDeepSeek({
+        apiKey: settings.apiKey,
+        baseUrl: settings.apiBaseUrl,
+        model: settings.textModel,
+        messages: prompt.messages,
+        thinking: false,
+        maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
+        temperature: 0.2,
+        onChunk: (kind, chunk) => {
+          if (kind === 'answer') text += chunk;
+        },
+      });
+      await recordUsage(estimateCostCny(result.usage, startedAt), startedAt).catch(error =>
+        log('outline usage failed', error),
+      );
+
+      const raw = text.trim() !== '' ? text : result.text;
+      if (raw.trim() === '') {
+        throw new OutlineFailure('empty', '模型没有返回内容，请重试');
+      }
+
+      const parsed = parseOutline(raw, request.duration, prompt.range, prompt.lineList);
+      if (!parsed) {
+        log('outline raw output', raw.slice(0, 1500));
+        throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+      }
+      segments = parsed;
+      model = settings.textModel;
     }
 
-    if (!settings.apiKey.trim()) {
-      throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
-    }
-
-    const prompt = buildOutlinePrompt({
-      title: request.title,
-      duration: request.duration,
-      cues,
-    });
-    if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
-
-    let text = '';
-    const startedAt = Date.now();
-    const result = await callDeepSeek({
-      apiKey: settings.apiKey,
-      baseUrl: settings.apiBaseUrl,
-      model: settings.textModel,
-      messages: prompt.messages,
-      thinking: false,
-      maxTokens: Math.min(4096, Math.max(1024, prompt.range.max * 80)),
-      temperature: 0.2,
-      onChunk: (kind, chunk) => {
-        if (kind === 'answer') text += chunk;
-      },
-    });
-    await recordUsage(estimateCostCny(result.usage, startedAt), startedAt).catch(error =>
-      log('outline usage failed', error),
-    );
-
-    const raw = text.trim() !== '' ? text : result.text;
-    if (raw.trim() === '') {
-      throw new OutlineFailure('empty', '模型没有返回内容，请重试');
-    }
-
-    const segments = parseOutline(raw, request.duration, prompt.range);
-    if (!segments) {
-      log('outline raw output', raw.slice(0, 1500));
-      throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+    // D16 + D18：有字幕就补「每段讲了什么」和核心结论；失败不影响大纲本身。
+    let conclusions: string[] | undefined;
+    if (cues.length > 0 && settings.apiKey.trim()) {
+      const detailPrompt = buildOutlineDetailPrompt({
+        title: request.title,
+        duration: request.duration,
+        segments,
+        cues,
+      });
+      if (detailPrompt) {
+        try {
+          let detailText = '';
+          const detailStartedAt = Date.now();
+          const detailResult = await callDeepSeek({
+            apiKey: settings.apiKey,
+            baseUrl: settings.apiBaseUrl,
+            model: settings.textModel,
+            messages: detailPrompt.messages,
+            thinking: false,
+            maxTokens: 4096,
+            temperature: 0.3,
+            onChunk: (kind, chunk) => {
+              if (kind === 'answer') detailText += chunk;
+            },
+          });
+          await recordUsage(estimateCostCny(detailResult.usage, detailStartedAt), detailStartedAt).catch(
+            error => log('outline detail usage failed', error),
+          );
+          const rawDetail = detailText.trim() !== '' ? detailText : detailResult.text;
+          const parsed = parseOutlineDetail(rawDetail, segments.length);
+          if (parsed) {
+            segments = segments.map((segment, index) =>
+              parsed.details[index] ? { ...segment, detail: parsed.details[index] } : segment,
+            );
+            if (parsed.conclusions.length > 0) conclusions = parsed.conclusions;
+          }
+        } catch (error) {
+          log('outline detail failed', error);
+        }
+      }
     }
 
     const outline: Outline = {
@@ -1091,8 +1136,10 @@ async function generateOutline(
       cid: request.cid,
       duration: request.duration,
       segments,
+      conclusions,
+      captions,
       createdAt: Date.now(),
-      model: settings.textModel,
+      model,
     };
     await chrome.storage.local.set({ [outlineStorageKey(request.bvid, request.p, request.cid)]: outline });
     // D6：大纲成功即入队落盘；失败不影响大纲返回。
@@ -1619,6 +1666,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       const now = new Date();
+      // 大纲里带着每章的内容说明、核心结论和时间戳来源，比面板传来的（只有 start/end/title）全。
+      const storedOutline = await chrome.storage.local.get(
+        outlineStorageKey(info.bvid, info.p, info.cid),
+      );
+      const outline = storedOutline[outlineStorageKey(info.bvid, info.p, info.cid)] as Outline | undefined;
+      const noteSegments = outline?.segments && outline.segments.length > 0 ? outline.segments : segments;
       // 原文底稿：优先用分 P 快照里的字幕/大纲/问答；没快照就用面板传上来的补。
       const page = await readPageRecord(info.bvid, info.p);
       const merged: CompanionPage = {
@@ -1660,10 +1713,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         fileName: kbFileName({ title: info.title, bvid: info.bvid, now }),
         markdown: buildKbMarkdown({
           info,
-          segments,
+          segments: noteSegments,
           qa,
           summary,
           keywords,
+          conclusions: outline?.conclusions,
+          captions: outline?.captions,
+          noSubtitle:
+            outline?.captions === 'frames' ||
+            (outline?.captions === 'chapters' && !merged.subtitle?.segments.length),
           now,
           kbDir: await readKbDir(),
         }),

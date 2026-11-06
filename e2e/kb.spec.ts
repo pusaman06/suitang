@@ -46,7 +46,7 @@ test('没问过就不写「当时我问了什么」整段', () => {
   expect(markdown.startsWith('---\ntitle: "我做了一个知识库插件"')).toBe(true);
   expect(markdown.includes('type: 知识')).toBe(true);
   expect(markdown.includes('## 大纲')).toBe(true);
-  expect(markdown.includes('- [00:00] 这插件解决什么问题')).toBe(true);
+  expect(markdown.includes('### [00:00] 这插件解决什么问题')).toBe(true);
   expect(markdown.includes('## 关键词')).toBe(true);
   expect(markdown.includes('p01.md')).toBe(true);
   expect(markdown.includes('当时我问了什么')).toBe(false);

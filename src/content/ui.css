@@ -287,11 +287,46 @@
   display: grid;
   gap: 2px;
   /* 大纲是参考信息，不能把问答和输入框挤出面板；9 段左右滚动看。 */
-  max-height: 110px;
+  max-height: 220px;
   margin: 4px 0 0;
   padding: 0;
   overflow: auto;
   list-style: none;
+}
+
+.vt-conclusions {
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #2f3a52;
+  border-radius: 8px;
+  background: #1a1f2e;
+}
+
+.vt-conclusions-title {
+  margin-bottom: 4px;
+  color: #9fb4e8;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.vt-conclusions-list {
+  margin: 0;
+  padding-left: 16px;
+  color: #cfd6e8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vt-outline-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0 0 6px;
+  padding: 0 6px 0 49px;
+  color: #8b93a8;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .vt-outline-item {
