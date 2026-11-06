@@ -612,7 +612,9 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
 
   const segments = mergeAsrSegments(splitIntoSentences(text, 0, duration));
   if (segments.length === 0) {
-    throw new AsrFailure('empty', '转写结果为空，请重试');
+    // 纯音乐 / 纯环境音的视频，SenseVoice 只会回一个 emoji（清洗后为空）。
+    // 这不是「重试就能好」的临时故障，所以文案要说清是没内容，而不是让用户一直点。
+    throw new AsrFailure('empty', '这个视频没检测到人声，只识别到音乐或环境声');
   }
 
   const result: AsrResult = {

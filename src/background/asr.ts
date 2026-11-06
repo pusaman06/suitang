@@ -36,13 +36,15 @@ interface AudioItem {
 }
 
 function pickAudio(items: AudioItem[] | undefined): AudioTrack | null {
+  // 转写只要语音听得清，取码率最低的音轨：上传快、超时风险小。
+  // 52 分钟的视频，最高码率约 41MB，最低码率约 26MB（SiliconFlow 上限 50MB）。
   const audios = (items ?? [])
     .map(item => ({
       url: item.baseUrl ?? item.base_url ?? '',
       bandwidth: Number(item.bandwidth) || 0,
     }))
     .filter(item => item.url !== '')
-    .sort((a, b) => b.bandwidth - a.bandwidth);
+    .sort((a, b) => a.bandwidth - b.bandwidth);
   return audios[0] ?? null;
 }
 
@@ -86,13 +88,14 @@ async function readPageAudio(
         }
 
         const items = root.__playinfo__?.data?.dash?.audio ?? [];
+        // 同 pickAudio：优先最低码率，ASR 不需要高音质，上传也更快。
         const audios = items
           .map(item => ({
             url: item.baseUrl ?? item.base_url ?? '',
             bandwidth: Number(item.bandwidth) || 0,
           }))
           .filter(item => item.url !== '')
-          .sort((a, b) => b.bandwidth - a.bandwidth);
+          .sort((a, b) => a.bandwidth - b.bandwidth);
         if (audios.length === 0) return { ok: false, error: '页面里还没有音轨地址' };
         return { ok: true, audios };
       },
@@ -212,7 +215,8 @@ export async function transcribeAudio(
   form.append('file', new Blob([buffer], { type: 'audio/mp4' }), 'audio.m4a');
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 180_000);
+  // 26MB 左右的音轨上传 + 转写大约 40 秒；长视频留足余量，超时再放宽到 5 分钟。
+  const timer = setTimeout(() => controller.abort(), 300_000);
   let response: Response;
   try {
     response = await fetch(endpoint, {

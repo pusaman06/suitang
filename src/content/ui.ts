@@ -1200,10 +1200,21 @@ export function mountUi(info: VideoInfo): UiHandle {
     );
   }
 
-  function failAsr(message: string, run: number): void {
+  function failAsr(message: string, run: number, code?: AsrError['code']): void {
     if (run !== asrRunToken || asrKey !== outlineInfoKey(currentInfo)) return;
     asrTranscribing = false;
     pendingOutlineAfterAsr = null;
+    // 「没检测到人声」重试也没用，别把用户堵在只有一个「重试」的错误块里：
+    // 留在空态上，把「按章节 / 按画面」两条替代路露出来。
+    if (code === 'empty') {
+      outlineError.hidden = true;
+      outlineEmpty.hidden = false;
+      outlineEmptyText.textContent = `转写失败：${message}。可以先看 UP 章节，或点「按画面生成」用截图凑一份大纲。`;
+      outlineFrames.hidden = false;
+      void probeChapters();
+      renderOutline();
+      return;
+    }
     setOutlineError(`转写失败：${message}`, () => void startAsr());
   }
 
@@ -1250,7 +1261,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       return;
     }
     if (message.type === 'asr:error') {
-      failAsr(message.error?.message ?? '转写失败', asrRunToken);
+      failAsr(message.error?.message ?? '转写失败', asrRunToken, message.error?.code);
     }
   };
   chrome.runtime.onMessage.addListener(onAsrMessage);
