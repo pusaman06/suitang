@@ -10,6 +10,7 @@ const visionModel = el<HTMLInputElement>('#vision-model');
 const textModel = el<HTMLInputElement>('#text-model');
 const thinking = el<HTMLInputElement>('#thinking');
 const frameEnabled = el<HTMLInputElement>('#frame-enabled');
+const diagnostics = el<HTMLInputElement>('#diagnostics');
 const asrApiKey = el<HTMLInputElement>('#asr-api-key');
 const asrModel = el<HTMLSelectElement>('#asr-model');
 const jumpAutoPlay = el<HTMLInputElement>('#jump-autoplay');
@@ -112,6 +113,7 @@ async function init(): Promise<void> {
   textModel.value = settings.textModel;
   thinking.checked = settings.thinking;
   frameEnabled.checked = settings.frameEnabled;
+  diagnostics.checked = settings.diagnostics;
   asrApiKey.value = settings.asrApiKey;
   asrModel.value = settings.asrModel;
   jumpAutoPlay.checked = settings.jumpAutoPlay;
@@ -189,6 +191,7 @@ save.addEventListener('click', () => {
     textModel: textModel.value.trim() || DEFAULT_SETTINGS.textModel,
     thinking: thinking.checked,
     frameEnabled: frameEnabled.checked,
+    diagnostics: diagnostics.checked,
     asrApiKey: asrApiKey.value.trim(),
     asrModel: asrModel.value || DEFAULT_SETTINGS.asrModel,
     jumpAutoPlay: jumpAutoPlay.checked,

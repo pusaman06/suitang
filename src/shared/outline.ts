@@ -24,6 +24,8 @@ export interface Outline {
   conclusions?: string[];
   /** 时间戳来源；缺省按 subtitle 处理（老数据都是官方字幕）。 */
   captions?: OutlineCaption;
+  /** 测试期诊断用：这份大纲靠什么生成的（切段方式 + 字幕情况）。 */
+  captionDetail?: string;
   createdAt: number;
   model: string;
 }

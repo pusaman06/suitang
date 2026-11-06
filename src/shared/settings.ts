@@ -37,6 +37,8 @@ export interface Settings {
   asrModel: string;
   /** D10 月度预算（人民币）；0 表示不设预算。 */
   monthlyBudgetCny: number;
+  /** 测试期诊断：面板上显示大纲是靠什么生成的。正式发布前关掉。 */
+  diagnostics: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrBaseUrl: DEFAULT_ASR_BASE_URL,
   asrModel: DEFAULT_ASR_MODEL,
   monthlyBudgetCny: 0,
+  diagnostics: true,
 };
 
 /** 旧版本存过退役别名，读出来时归一到现役模型。 */
@@ -129,6 +132,8 @@ export function normalizeSettings(patch: Partial<Settings> | undefined | null): 
         : DEFAULT_SETTINGS.asrModel,
     // D10 新增：旧存档没有预算字段时按 0（不设预算）处理。
     monthlyBudgetCny: normalizeMoney(saved.monthlyBudgetCny),
+    // 测试期新增：默认开着，方便看大纲是靠什么生成的。
+    diagnostics: typeof saved.diagnostics === 'boolean' ? saved.diagnostics : DEFAULT_SETTINGS.diagnostics,
   };
 }
 

@@ -61,6 +61,7 @@ export function mountUi(info: VideoInfo): UiHandle {
           <span class="vt-outline-state">未生成</span>
         </button>
         <div class="vt-outline-body">
+          <p class="vt-outline-diag" hidden></p>
           <div class="vt-conclusions" hidden>
             <div class="vt-conclusions-title">核心结论</div>
             <ul class="vt-conclusions-list"></ul>
@@ -124,6 +125,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineHead = must<HTMLButtonElement>(shadow, '.vt-outline-head');
   const outlineState = must<HTMLElement>(shadow, '.vt-outline-state');
   const outlineBody = must<HTMLElement>(shadow, '.vt-outline-body');
+const outlineDiag = must<HTMLElement>(shadow, '.vt-outline-diag');
   const conclusionsBox = must<HTMLElement>(shadow, '.vt-conclusions');
   const conclusionsList = must<HTMLUListElement>(shadow, '.vt-conclusions-list');
   const outlineEmpty = must<HTMLElement>(shadow, '.vt-outline-empty');
@@ -190,6 +192,8 @@ export function mountUi(info: VideoInfo): UiHandle {
     settings = next;
     if (activeRequestId === '') status.textContent = next.apiKey ? '就绪' : '未配置 API Key';
     updateAsrButton();
+    // 设置里改了诊断开关时，已有的大纲也要跟着刷新这行小字。
+    setTimeout(() => renderOutline(), 0);
   });
 
   /* -------- D3 切片 2：问答记录持久化 -------- */
@@ -591,6 +595,12 @@ export function mountUi(info: VideoInfo): UiHandle {
         ? `抓画面 ${outlineCaptureDone}/${outlineCaptureTotal}`
         : '生成中…'
       : '生成大纲';
+    // 测试期诊断：一行小字说清这份大纲靠什么生成。设置里可以关。
+    // 老缓存里没有 captionDetail，提示一下，别让人以为丢了什么。
+    const diag =
+      outline?.captionDetail ?? (outline ? '本地缓存的大纲（点「重新生成」可查看来源）' : '');
+    outlineDiag.textContent = diag;
+    outlineDiag.hidden = !(settings?.diagnostics ?? true) || diag === '';
     if (outline) {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;

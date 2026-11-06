@@ -256,6 +256,15 @@
         提问时附带当前画面
       </label>
 
+      <label class="check">
+        <input id="diagnostics" type="checkbox" />
+        显示诊断信息（测试用，正式发布前关掉）
+      </label>
+      <p class="hint">
+        打开后，大纲上方会多一行小字，写明这份大纲是靠什么生成的：官方字幕（并注明是人工还是
+        B 站 AI 中文）、语音转写、UP 主章节，还是画面截图。
+      </p>
+
       <label>
         语音转写 Key（SiliconFlow，可选）
         <input id="asr-api-key" type="password" placeholder="sk-..." autocomplete="off" />

@@ -234,6 +234,9 @@ test('点生成后出现分段，点第 2 段跳到该段起点；再次打开�
   const items = page.locator('.vt-outline-item');
   await expect(items).toHaveCount(9);
   await expect(items.first()).toContainText('00:00');
+  // 测试期诊断：写了这份大纲是靠什么生成的。
+  await expect(page.locator('.vt-outline-diag')).toBeVisible();
+  await expect(page.locator('.vt-outline-diag')).toContainText('模型按字幕切');
 
   const secondStart = Number(await items.nth(1).getAttribute('data-start'));
   const secondEnd = Number(await items.nth(1).getAttribute('data-end'));
@@ -480,6 +483,7 @@ test('无字幕但有 UP 章节：直接用章节当大纲，不调模型', asyn
     const before = mock.requests.length;
     await page.locator('.vt-outline-generate').click();
     await expect(page.locator('.vt-outline-item')).toHaveCount(3, { timeout: 20_000 });
+    await expect(page.locator('.vt-outline-diag')).toContainText('UP 章节');
     await expect(page.locator('.vt-outline-item').first()).toContainText('开场与自我介绍');
     // 章节是现成的，不应该再花钱问模型。
     expect(mock.requests.length).toBe(before);

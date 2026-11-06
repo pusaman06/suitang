@@ -316,6 +316,14 @@
   list-style: none;
 }
 
+.vt-outline-diag {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #7f8aa3;
+  word-break: break-all;
+}
+
 .vt-conclusions {
   max-height: 110px;
   overflow: auto;

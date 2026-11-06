@@ -696,7 +696,10 @@ async function readOutline(bvid: string, p: number, cid?: number): Promise<Outli
 }
 
 /** 复用 D2 的字幕缓存；缓存没有时走 loadSubtitles，读完整 cues 而不是只给前 10 条。 */
-async function outlineCues(tabId: number, request: OutlineRequest): Promise<SubtitleCue[]> {
+async function outlineCues(
+  tabId: number,
+  request: OutlineRequest,
+): Promise<{ cues: SubtitleCue[]; track: SubtitleTrack | null }> {
   const cacheKey = request.cid ? `sub:${request.bvid}:${request.p}:${request.cid}` : '';
   const readCache = async (): Promise<SubtitleCue[]> => {
     if (!cacheKey) return [];
@@ -705,11 +708,11 @@ async function outlineCues(tabId: number, request: OutlineRequest): Promise<Subt
   };
 
   const cached = await readCache();
-  if (cached.length > 0) return cached;
-  if (!request.cid) return [];
+  if (cached.length > 0) return { cues: cached, track: null };
+  if (!request.cid) return { cues: [], track: null };
 
   const meta = await readVideoMeta(tabId);
-  if (!meta?.aid) return [];
+  if (!meta?.aid) return { cues: [], track: null };
   const result = await loadSubtitles(tabId, {
     bvid: request.bvid,
     aid: meta.aid,
@@ -718,7 +721,7 @@ async function outlineCues(tabId: number, request: OutlineRequest): Promise<Subt
     duration: request.duration,
   });
   if (!result.ok) throw new OutlineFailure('no-subtitle', result.error ?? '该视频没有字幕');
-  return readCache();
+  return { cues: await readCache(), track: result.track ?? null };
 }
 
 function outlineError(error: unknown): OutlineGenerateResponse {
@@ -972,6 +975,8 @@ async function generateFrameOutline(
     cid: request.cid,
     duration: request.duration,
     segments,
+    captions: 'frames',
+    captionDetail: `画面截图 ${frames.length} 张 · 无字幕`,
     createdAt: Date.now(),
     model: 'frames-vision',
   };
@@ -1008,8 +1013,14 @@ async function generateOutline(
 
     let cues: SubtitleCue[] = [];
     let captions: OutlineCaption = 'subtitle';
+    // 测试期诊断：记下「这份大纲到底靠什么生成的」，面板上直接显示。
+    let captionDetail = '';
     try {
-      cues = await outlineCues(tabId, request);
+      const loaded = await outlineCues(tabId, request);
+      cues = loaded.cues;
+      captionDetail = loaded.track
+        ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
+        : '字幕（本地缓存）';
     } catch (error) {
       if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
       // 没有官方字幕：先看有没有缓存过的 ASR（时间戳是估算的，D19 要标注）。
@@ -1017,6 +1028,9 @@ async function generateOutline(
       if (asr) {
         cues = asrCues(asr);
         captions = 'asr';
+        captionDetail = '语音转写 ASR（时间戳按字数估算）';
+      } else {
+        captionDetail = '没有可用字幕';
       }
     }
 
@@ -1034,10 +1048,12 @@ async function generateOutline(
 
     let segments: OutlineSegment[];
     let model: string;
+    let cutSource: string;
     if (chapters.length >= 2) {
       segments = chapters;
       model = 'bilibili-chapters';
       captions = 'chapters';
+      cutSource = `UP 章节 ${chapters.length} 段（模型未参与切段）`;
     } else {
       if (!settings.apiKey.trim()) {
         throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
@@ -1086,6 +1102,7 @@ async function generateOutline(
       }
       segments = parsed;
       model = settings.textModel;
+      cutSource = `模型按字幕切 ${segments.length} 段`;
     }
 
     // D16 + D18：有字幕就补「每段讲了什么」和核心结论；失败不影响大纲本身。
@@ -1138,6 +1155,7 @@ async function generateOutline(
       segments,
       conclusions,
       captions,
+      captionDetail: `${cutSource} · ${captionDetail}`,
       createdAt: Date.now(),
       model,
     };
