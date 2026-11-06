@@ -24,6 +24,11 @@ export interface Outline {
   conclusions?: string[];
   /** 时间戳来源；缺省按 subtitle 处理（老数据都是官方字幕）。 */
   captions?: OutlineCaption;
+  /**
+   * 每章说明文字的来源：用 UP 章节当骨架时 captions 是 'chapters'，
+   * 但说明是模型照字幕写的；'asr' 表示说明来自语音转写，笔记里要如实标注。
+   */
+  detailCaptions?: OutlineCaption;
   /** 测试期诊断用：这份大纲靠什么生成的（切段方式 + 字幕情况）。 */
   captionDetail?: string;
   createdAt: number;

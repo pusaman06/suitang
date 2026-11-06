@@ -160,7 +160,7 @@ export function buildOutlineDetailPrompt(input: OutlineDetailPromptInput): Outli
   const system = [
     `你是课程笔记助手。下面是视频《${input.title}》（时长 ${formatTimestamp(input.duration)}）已经分好的 ${segments.length} 段大纲，每段后面附上这一段范围内的字幕原文。`,
     '请做两件事：',
-    '1. 为每一段写 1–2 句话，说明这一段**具体讲了哪些事**（讲内容：讲了什么概念、举了什么例子、给出了什么方法）。不要写评价、不要写「值得学习」这类空话。',
+    '1. 为每一段写 1–2 句话（60–120 字），说明这一段**具体讲了哪些事**（讲内容：讲了什么概念、举了什么例子、给出了什么方法）。不要写评价、不要写「值得学习」这类空话。',
     '2. 再写 3–5 条整片的**核心结论**：用你自己的话概括这个视频到底想说什么。可以合并多处内容，但**不得引入字幕里没有的信息**，也不要写成「视频提到了……」这种描述。',
     '只输出一个 JSON 对象，格式：',
     '{"sections":[{"index":1,"detail":"这一段的内容说明"}],"conclusions":["结论一","结论二"]}',
@@ -174,6 +174,19 @@ export function buildOutlineDetailPrompt(input: OutlineDetailPromptInput): Outli
     ],
     lines: used,
   };
+}
+
+/** 模型偶尔超字数；截断时尽量停在句末，别把一句话拦腰砍。 */
+function clipDetail(text: string, max = 200): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const lastStop = Math.max(
+    head.lastIndexOf('。'),
+    head.lastIndexOf('！'),
+    head.lastIndexOf('？'),
+    head.lastIndexOf('；'),
+  );
+  return lastStop >= 60 ? head.slice(0, lastStop + 1) : head;
 }
 
 /** 解析 D16/D18 的返回；容忍代码围栏、段号越界、条数超限。 */
@@ -210,7 +223,7 @@ export function parseOutlineDetail(text: string, segmentCount: number): OutlineD
   for (const { index, detail } of collected) {
     const slot = index + shift - 1;
     if (slot < 0 || slot >= segmentCount) continue;
-    if (details[slot] === '') details[slot] = detail.slice(0, 200);
+    if (details[slot] === '') details[slot] = clipDetail(detail);
   }
 
   const conclusions: string[] = [];
@@ -218,7 +231,7 @@ export function parseOutlineDetail(text: string, segmentCount: number): OutlineD
   for (const item of list) {
     const line = typeof item === 'string' ? item.trim() : '';
     if (line === '' || conclusions.includes(line)) continue;
-    conclusions.push(line.slice(0, 200));
+    conclusions.push(clipDetail(line, 200));
     if (conclusions.length >= 5) break;
   }
 

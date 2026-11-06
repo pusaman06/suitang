@@ -52,6 +52,8 @@ export interface KbNoteInput {
   conclusions?: string[];
   /** 时间戳来源：`asr` 时在笔记里注明是估算值（D19）。 */
   captions?: string;
+  /** 章节说明文字的来源：章节骨架 + ASR 说明时是 `asr`，和 captions 不同。 */
+  detailCaptions?: string;
   /** 视频没有字幕：核心结论不生成，笔记底部注明原因（D18）。 */
   noSubtitle?: boolean;
   now?: Date;
@@ -162,6 +164,9 @@ export function buildKbMarkdown(input: KbNoteInput): string {
     if (input.captions === 'asr') {
       lines.push('> 时间戳由语音转写按字数估算，可能有几十秒出入。');
       lines.push('');
+    } else if (input.detailCaptions === 'asr') {
+      lines.push('> 章节边界来自 UP 主；章节说明由语音转写内容生成，可能有误差。');
+      lines.push('');
     }
     for (const segment of segments) {
       lines.push(`### [${formatClock(segment.start)}] ${segment.title}`);
@@ -240,6 +245,10 @@ export function buildKbSourceMarkdown(page: CompanionPage, now: Date = new Date(
   const cues = page.subtitle?.segments ?? [];
   if (cues.length > 0) {
     lines.push('## 字幕', '');
+    if (page.subtitle?.source === 'asr') {
+      lines.push('> 时间戳由语音转写按字数估算，可能有几十秒出入。');
+      lines.push('');
+    }
     for (const cue of cues) {
       lines.push(`**[${formatClock(cue.from)}]** ${cue.text.trim()}`, '');
     }

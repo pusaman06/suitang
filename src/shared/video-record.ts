@@ -36,7 +36,8 @@ export interface CompanionSubtitleSegment {
 
 export interface CompanionSubtitle {
   lang: string;
-  source: 'bilibili';
+  /** 字幕来源：ASR 转写的时间戳是估算值，底稿里要如实标注。 */
+  source: 'bilibili' | 'asr';
   segments: CompanionSubtitleSegment[];
 }
 
@@ -85,6 +86,8 @@ export interface PagePayloadInput {
   duration?: number;
   cues?: SubtitleCue[];
   subtitleLang?: string;
+  /** 上面 cues 的来源；不传按官方字幕处理。 */
+  subtitleSource?: CompanionSubtitle['source'];
   subtitle?: CompanionSubtitle;
   outline?: OutlineSegment[];
   qa?: CompanionQa[];
@@ -162,7 +165,7 @@ export function buildPagePayload(input: PagePayloadInput): CompanionPage {
   } else if (input.cues && input.cues.length > 0) {
     page.subtitle = {
       lang: nonEmpty(input.subtitleLang) ?? 'unknown',
-      source: 'bilibili',
+      source: input.subtitleSource ?? 'bilibili',
       segments: input.cues.map(cue => ({
         from: cue.from,
         to: cue.to,

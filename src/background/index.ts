@@ -1164,6 +1164,8 @@ async function generateOutline(
     let captions: OutlineCaption = 'subtitle';
     // 测试期诊断：记下「这份大纲到底靠什么生成的」，面板上直接显示。
     let captionDetail = '';
+    // 章节骨架 + 字幕说明时，captions 会被改成 'chapters'，说明来源得单独存。
+    let detailCaptions: OutlineCaption | undefined;
 
     if (mode === 'asr') {
       // 用户明确要「用已经转写的文字」，不再拉官方字幕。
@@ -1217,6 +1219,10 @@ async function generateOutline(
       throw new OutlineFailure('no-chapters', 'UP 主没有给这个视频分章节，换个方式试试');
     }
 
+    // cues 的真实来源（官方字幕 / ASR）：章节分支会把 captions 改成 'chapters'，
+    // 先留一份，笔记和底稿要靠它如实标注。
+    const cueCaption = captions;
+
     let segments: OutlineSegment[];
     let model: string;
     let cutSource: string;
@@ -1227,6 +1233,8 @@ async function generateOutline(
       if (mode === 'auto' && cues.length === 0) {
         throw new OutlineFailure('no-subtitle', '这个视频没有中文字幕，UP 主只分了章节标题');
       }
+      // 说明文字来自语音转写时单独记一笔：笔记里不能因为骨架是章节就说「没有字幕」。
+      if (cueCaption === 'asr') detailCaptions = 'asr';
       segments = chapters;
       model = 'bilibili-chapters';
       captions = 'chapters';
@@ -1376,6 +1384,7 @@ async function generateOutline(
       segments,
       conclusions,
       captions,
+      detailCaptions,
       captionDetail: `${cutSource} · ${captionDetail}`,
       createdAt: Date.now(),
       model,
@@ -1389,6 +1398,7 @@ async function generateOutline(
       title: request.title,
       duration: request.duration,
       cues,
+      subtitleSource: cueCaption === 'asr' ? 'asr' : undefined,
       outline: segments,
     }).catch(error => log('outline sync failed', error));
     return { ok: true, outline };
@@ -1912,7 +1922,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const outline = storedOutline[outlineStorageKey(info.bvid, info.p, info.cid)] as Outline | undefined;
       const noteSegments = outline?.segments && outline.segments.length > 0 ? outline.segments : segments;
       // 原文底稿：优先用分 P 快照里的字幕/大纲/问答；没快照就用面板传上来的补。
-      const page = await readPageRecord(info.bvid, info.p);
+      const page = await readPageRecord(info.bvid, info.p, info.cid);
       const merged: CompanionPage = {
         ...(page ?? { schema: 1, bvid: info.bvid, p: info.p, updatedAt: now.toISOString() }),
         title: info.title,
@@ -1958,9 +1968,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           keywords,
           conclusions: outline?.conclusions,
           captions: outline?.captions,
+          detailCaptions: outline?.detailCaptions,
+          // 「没有字幕」说的是真的一个字幕文本都没拿到：有章节说明或核心结论就说明
+          // 说明文字有来源（章节骨架 + ASR 说明的组合不能算没字幕）。
           noSubtitle:
-            outline?.captions === 'frames' ||
-            (outline?.captions === 'chapters' && !merged.subtitle?.segments.length),
+            !outline?.conclusions?.length &&
+            !noteSegments.some(segment => (segment.detail ?? '').trim() !== '') &&
+            !merged.subtitle?.segments.length,
           now,
           kbDir: await readKbDir(),
         }),
