@@ -860,7 +860,12 @@ export function mountUi(info: VideoInfo): UiHandle {
           outlineCapturing = false;
           outlineEmpty.hidden = false;
           outlineList.hidden = true;
-          outlineEmptyText.textContent = NO_SUBTITLE_TEXT;
+          // 把 background 给的真实原因显示出来，否则「没字幕 / 地址不匹配 /
+          // 时长对不上」长得一模一样，用户和我们都无从判断。
+          const reason = typeof response.message === 'string' ? response.message.trim() : '';
+          outlineEmptyText.textContent = reason
+            ? `${reason}。也可以「按画面生成」用截图凑一份大纲。`
+            : NO_SUBTITLE_TEXT;
           outlineFrames.hidden = false;
           renderOutlineState();
           return;
