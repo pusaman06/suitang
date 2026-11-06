@@ -187,7 +187,8 @@
 
 .vt-outline-body[hidden],
 .vt-outline-list[hidden],
-.vt-outline-error[hidden] {
+.vt-outline-error[hidden],
+.vt-outline-empty[hidden] {
   display: none;
 }
 
