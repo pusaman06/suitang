@@ -415,7 +415,8 @@
   flex: 1;
 }
 
-.vt-outline-retry {
+.vt-outline-retry,
+.vt-outline-retry-subtitles {
   flex: none;
   margin-left: 0;
 }

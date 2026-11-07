@@ -1016,14 +1016,36 @@ async function generateOutline(
     // 字幕链路：官方字幕 / B 站 AI 字幕缓存优先；没有就用已经转写好的 ASR。
     // 章节骨架已经去掉：只有章节名的「引言 / 新闻 / 磕头」讲不出内容，
     // 无字幕时面板会去转写，或者由用户点「按画面生成」。
+    //
+    // 两个通道：字幕接口偶发「缓存错乱 / 返回空 / 时长对不上」只是暂时故障，
+    // 隔 1 秒再拉一次；两次都不行才把用户推去转写（转写要下音频，有成本也慢）。
+    const retryableSubtitleError = (message: string): boolean =>
+      /缓存错乱|对不上|请求失败|HTTP|不是合法 JSON|没有有效句子/.test(message);
+    let subtitle: { cues: SubtitleCue[]; track: SubtitleTrack | null } | null = null;
     try {
-      const loaded = await outlineCues(tabId, request);
-      cues = loaded.cues;
-      captionDetail = loaded.track
-        ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
-        : '字幕（本地缓存）';
+      subtitle = await outlineCues(tabId, request);
     } catch (error) {
       if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
+      // 只是暂时故障才值得再试一次；「真没字幕 / 需要登录」直接走下面的兜底。
+      if (retryableSubtitleError(error.message)) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+          subtitle = await outlineCues(tabId, request);
+        } catch (retryError) {
+          if (!(retryError instanceof OutlineFailure) || retryError.code !== 'no-subtitle') {
+            throw retryError;
+          }
+          // 两次都失败：保持「没有可用字幕」兜底，交给 ASR / 画面那条路。
+        }
+      }
+    }
+
+    if (subtitle) {
+      cues = subtitle.cues;
+      captionDetail = subtitle.track
+        ? `字幕 ${subtitle.track.lan}${subtitle.track.lan_doc ? `（${subtitle.track.lan_doc}）` : ''}`
+        : '字幕（本地缓存）';
+    } else {
       const asr = await readAsrResult(request.bvid, request.p, request.cid);
       if (asr) {
         cues = asrCues(asr);

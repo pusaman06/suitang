@@ -86,6 +86,9 @@ export function mountUi(info: VideoInfo): UiHandle {
           <div class="vt-outline-error" hidden>
             <span class="vt-outline-error-text"></span>
             <button class="vt-retry vt-outline-retry" type="button">重试</button>
+            <button class="vt-retry vt-outline-retry-subtitles" type="button" hidden>
+              试字幕
+            </button>
           </div>
         </div>
       </section>
@@ -129,6 +132,7 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
+  const outlineRetrySubtitles = must<HTMLButtonElement>(shadow, '.vt-outline-retry-subtitles');
   const status = must<HTMLElement>(shadow, '.vt-status');
   const usageLine = must<HTMLButtonElement>(shadow, '.vt-usage');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
@@ -520,6 +524,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineError.hidden = false;
     outlineErrorText.textContent = message;
     outlineRetryAction = retry;
+    outlineRetrySubtitles.hidden = true;
     renderOutlineState();
   }
 
@@ -696,7 +701,10 @@ export function mountUi(info: VideoInfo): UiHandle {
     }
   }
 
-  async function generateOutline(mode: OutlineMode = 'auto'): Promise<void> {
+  async function generateOutline(
+    mode: OutlineMode = 'auto',
+    options: { subtitlesOnly?: boolean } = {},
+  ): Promise<void> {
     if (outlineGenerating) return;
     const requested = currentInfo;
     const key = outlineInfoKey(requested);
@@ -735,7 +743,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineCapturing = false;
       outlineCaptureDone = 0;
       outlineCaptureTotal = 0;
-      setOutlineError(message, () => void generateOutline(mode));
+      setOutlineError(message, () => void generateOutline(mode, options));
     };
 
     try {
@@ -762,6 +770,13 @@ export function mountUi(info: VideoInfo): UiHandle {
           const asrReady = !!settings?.asrApiKey.trim();
           const asrSeconds = estimateAsrSeconds(requested.duration);
           renderOutlineState();
+
+          // 「试字幕」只走官方字幕通道：失败就如实说，不再自动转写（避免又花一次钱）。
+          if (options.subtitlesOnly) {
+            outlineEmptyText.textContent = `${head}。官方字幕暂时拿不到，可以先「按画面生成」用截图凑一份大纲。`;
+            outlineFrames.hidden = false;
+            return;
+          }
 
           // 登录失效 / 接口错乱这类「暂时拿不到」：转写也救不了，直接说明白。
           if (/登录|权限|错乱|对不上/.test(head)) {
@@ -924,7 +939,13 @@ export function mountUi(info: VideoInfo): UiHandle {
       renderOutline();
       return;
     }
-    setOutlineError(`转写失败：${message}`, () => void startAsr());
+    // 转写失败不一定是「没字幕」：官方字幕接口可能已经恢复。给一个只走字幕通道的
+    // 入口，点它不会再触发转写（避免反复花钱）。
+    setOutlineError(
+      `转写失败：${message}。也可以点「试字幕」重新拉一次官方字幕。`,
+      () => void startAsr(),
+    );
+    outlineRetrySubtitles.hidden = false;
   }
 
   const onAsrMessage = (raw: unknown): void => {
@@ -1036,6 +1057,9 @@ export function mountUi(info: VideoInfo): UiHandle {
     const retry = outlineRetryAction;
     outlineRetryAction = null;
     retry?.();
+  });
+  outlineRetrySubtitles.addEventListener('click', () => {
+    void generateOutline('auto', { subtitlesOnly: true });
   });
   outlineList.addEventListener('click', event => {
     const item = (event.target as HTMLElement | null)?.closest<HTMLElement>('.vt-outline-item');
