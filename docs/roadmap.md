@@ -95,18 +95,6 @@
 - **踩过的坑**：真实模型把 `start/end` 写成 `"10:32"` 字符串，`Number()` 得到 NaN，整份大纲被判坏格式（`e967cf4` 修：`toSeconds()` 兼容 mm:ss，prompt 也要求整数秒）；42 分钟视频被切成 27 段，超上限整份判坏（`60b56e5` 修：`coalesceSegments` 均匀合并）。
 - **还欠**：抽帧会 seek，画面会跳几秒；6/8 帧档位没有单测；抓帧中途切 P 的中止路径没有 e2e。
 
-### D6 落盘 + companion ⏸ 已停
-
-- **目标**：视频数据不只在浏览器里。
-- **原交付**：本地 Node 服务 `127.0.0.1:8787`、每个视频一份 JSON + 一份 Markdown 写到 `D:\project\suitang\data\`、扩展侧同步队列（失败不阻塞问答）。
-- **2026-11-07 停止**：快照同步与 `data/videos` 写入已删。companion 服务保留，改服务知识库链路（见 D11）。
-
-### D7 DSH 技能 ⏸ 冻结
-
-- **目标**：在 DSH 里复习看过的视频。
-- **交付**：`.dsh/skills/suitang/`（`SKILL.md` + `scripts/vt.mjs`，`list` / `show <bvid> [p]` / `search <词>`），零依赖，默认读 `D:\project\suitang\data`，可用 `--dir` 或 `SUITANG_DATA` 覆盖。
-- **现状**：技能目录保留，但读的 `data/` 随 D6 停止而不再更新；恢复需先恢复落盘。
-
 ### D8 打磨 ✅
 
 - **目标**：能交给别人用。
