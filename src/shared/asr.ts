@@ -77,26 +77,54 @@ function cleanAsrText(text: string): string {
 }
 
 /**
- * 英文 ASR 有时整段没有句末标点（SenseVoice 对英文课常见），只切成一句会让大纲
- * 退化成 1–2 段；按逗号/分号再切，仍切不动就在 ~80 字符处按空格硬切。
+ * 把整段转写文本打包成字幕行，参照 Bilitato 的 splitTranscriptionTextByPunctuation：
+ * 每行不超过 80 字符，逗号/顿号也参与断行，句末标点立即断。
+ * SenseVoice 只返回整段文本、没有时间戳；切得越细，大纲和知识库里的字幕才越接近逐句
+ * （9 分钟英文课只按句号切会得到 12 行、每行横跨几十秒，大纲只能切 2 段）。
  */
-function splitLongSentence(sentence: string): string[] {
-  const byPause = sentence
-    .split(/(?<=[,;:])\s+/u)
-    .map(item => item.trim())
-    .filter(item => item !== '' && !PUNCT_ONLY_RE.test(item));
-  if (byPause.length > 1) return byPause;
+const ASR_ROW_MAX_CHARS = 80;
+const ASR_PIECE_RE = /[^。！？!?；;，,、\n]+[。！？!?；;，,、]?/gu;
+const ASR_SENTENCE_END_RE = /[。！？!?；;]$/u;
 
-  const chunks: string[] = [];
-  let rest = sentence.trim();
-  while (rest.length > 80) {
-    let cut = rest.lastIndexOf(' ', 80);
-    if (cut < 40) cut = 80;
-    chunks.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
+function packTranscriptionRows(text: string): string[] {
+  const pieces = text.match(ASR_PIECE_RE) ?? [text];
+  const rows: string[] = [];
+  let buffer = '';
+
+  const flush = (): void => {
+    const value = buffer.trim();
+    buffer = '';
+    if (value === '') return;
+    if (value.length <= ASR_ROW_MAX_CHARS) {
+      rows.push(value);
+      return;
+    }
+    // 英文课可能整段没有可切标点：按空格硬切，别让一行横跨几十秒。
+    let rest = value;
+    while (rest.length > ASR_ROW_MAX_CHARS) {
+      let cut = rest.lastIndexOf(' ', ASR_ROW_MAX_CHARS);
+      if (cut < ASR_ROW_MAX_CHARS / 2) cut = ASR_ROW_MAX_CHARS;
+      rows.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
+    }
+    if (rest !== '') rows.push(rest);
+  };
+
+  for (const piece of pieces) {
+    const value = piece.trim();
+    if (value === '') continue;
+    if (buffer === '') {
+      buffer = value;
+    } else if ((buffer + value).length <= ASR_ROW_MAX_CHARS && !ASR_SENTENCE_END_RE.test(buffer)) {
+      buffer += value;
+    } else {
+      flush();
+      buffer = value;
+    }
+    if (ASR_SENTENCE_END_RE.test(buffer) || buffer.length >= ASR_ROW_MAX_CHARS) flush();
   }
-  if (rest !== '') chunks.push(rest);
-  return chunks.filter(item => item !== '' && !PUNCT_ONLY_RE.test(item));
+  flush();
+  return rows.filter(row => !PUNCT_ONLY_RE.test(row));
 }
 
 /**
@@ -111,15 +139,7 @@ export function splitIntoSentences(text: string, start: number, end: number): As
   const safeEnd = Number.isFinite(end) ? Math.max(safeStart + 0.1, end) : safeStart + 0.1;
   const span = safeEnd - safeStart;
 
-  let sentences = source
-    .split(/[。！？；\n]+|(?<=[.!?])\s+/u)
-    .map(sentence => sentence.trim())
-    .filter(sentence => sentence !== '' && !PUNCT_ONLY_RE.test(sentence));
-  // SenseVoice 对英文课常只返回逗号分隔的大段文本（一句 500+ 字符、横跨几十秒），
-  // 不细分的话 9 分钟课程只切出十几句，大纲只能切出 2 段。长句继续按逗号/空格拆。
-  sentences = sentences.flatMap(sentence =>
-    sentence.length > 120 ? splitLongSentence(sentence) : [sentence],
-  );
+  const sentences = packTranscriptionRows(source);
   if (sentences.length === 0) return [];
 
   const weights = sentences.map(sentence => Math.max(1, sentence.length));

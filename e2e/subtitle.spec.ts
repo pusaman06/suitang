@@ -141,18 +141,19 @@ test('少数字幕行也接受一行一段，并按可用行数放宽段数下�
 
 /**
  * 英文讲课视频（吴恩达 RAG 课这类）ASR 出来的是英文：旧的切句正则只认中文标点，
- * 整段英文切不开，大纲会退化成 1–2 段。英文句末标点后跟空格也要能切；
- * 整段连标点都没有时按逗号/长度兜底。
+ * 整段英文切不开，大纲会退化成 1–2 段。改成按标点打包成 ≤80 字符的字幕行
+ * （参照 Bilitato），英文逗号也参与断行；连标点都没有时按空格硬切。
  */
-test('英文转写按英文句末标点切句，无标点长文本按逗号兜底', async () => {
+test('英文转写按标点打包成不超过 80 字符的字幕行', async () => {
   const { splitIntoSentences } = await import('../src/shared/asr');
   const english = splitIntoSentences(
     'LLMs are just fancy autocomplete. They predict the next token, not facts. Is that useless? No!',
     0,
     60,
   );
-  expect(english.length).toBe(4);
-  expect(english[0].text).toBe('LLMs are just fancy autocomplete.');
+  expect(english.length).toBeGreaterThanOrEqual(3);
+  for (const row of english) expect(row.text.length).toBeLessThanOrEqual(80);
+  expect(english[0].text.startsWith('LLMs are just fancy autocomplete.')).toBe(true);
   expect(english[0].start).toBe(0);
   expect(english[english.length - 1].end).toBe(60);
 
@@ -161,6 +162,7 @@ test('英文转写按英文句末标点切句，无标点长文本按逗号兜�
     'with a comma in the middle, and more words after that to make it long enough';
   const fallback = splitIntoSentences(long, 0, 300);
   expect(fallback.length).toBeGreaterThan(2);
+  for (const row of fallback) expect(row.text.length).toBeLessThanOrEqual(80);
   expect(fallback[0].start).toBe(0);
   expect(fallback[fallback.length - 1].end).toBe(300);
 });
