@@ -25,7 +25,7 @@ import { loadSettings, type Settings } from '../shared/settings';
 import type { VideoInfo } from '../shared/types';
 import { getPlaybackTime, getVideoElement, getVisibleVideoRect, seekVideo, setDanmakuHidden } from './page';
 
-const HOST_ID = 'video-tutor-host';
+const HOST_ID = 'suitang-host';
 
 export interface UiHandle {
   toggle(): void;

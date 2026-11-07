@@ -2,6 +2,7 @@
 
 > 状态：D1–D5、D9、D10 已完成；D6/D7 已停、知识库链路冻结（2026-11-07 收口）。本文保留当时的设计与推演，当前范围以 README 为准。
 > 日期：2026-11-05（2026-11-07 加注）
+> 项目改名：2026-11-07 改为「随堂（Suitang）」，目录同步改名 `suitang`（本文已按新名更新）。
 > 关联：grilling 决策见文末「决策记录」
 
 ---
@@ -74,7 +75,7 @@
 │  · 消息路由          │   └───────────┬──────────────┘
 └──────────┬───────────┘               │
            ▼                           ▼
-   api.deepseek.com        D:\project\video-tutor\data\
+   api.deepseek.com        D:\project\suitang\data\
                                            │
                                            ▼
                                   DSH 技能 video-notes
@@ -142,7 +143,7 @@
   - `GET /api/videos` 列表
   - `GET /api/videos/:bvid`
   - `PUT /api/videos/:bvid` 覆盖写入
-- 落盘：`videos/<bvid>.json` + `videos/<bvid>.md`，默认目录 `D:\project\video-tutor\data\`，可用 `--dir` 改。
+- 落盘：`videos/<bvid>.json` + `videos/<bvid>.md`，默认目录 `D:\project\suitang\data\`，可用 `--dir` 改。
 - CORS 只允许 `chrome-extension://*`；不接受局域网访问。
 
 ### 4.3 DSH 技能
@@ -445,7 +446,7 @@ A: ……
 - [ ] 刷新页面后历史还在（切片 2，未做）
 - [x] 无字幕视频有明确提示，不崩（e2e `无字幕视频：不编造字幕，仍能回答`）
 - [x] 关掉 companion，扩展仍可用（面板显示待同步 N 条，问答不受影响）
-- [x] 打开 companion，文件落盘，DSH 能搜到（`course.md` 185 P；`video-tutor` 技能 list/show 可读）
+- [x] 打开 companion，文件落盘，DSH 能搜到（`course.md` 185 P；`suitang` 技能 list/show 可读）
 - [x] 设置页能改 API Key / 模型 / 上下文窗口 / 回答长度 / 追问轮数 / 画面开关 / companion 地址
 - [x] 连续问 10 次不触发 SW 回收（e2e 实测 10 轮全过，17.7 秒）
 
@@ -456,7 +457,7 @@ A: ……
 ## 12. 目录结构
 
 ```
-video-tutor/
+suitang/
 ├─ package.json
 ├─ tsconfig.json
 ├─ vite.config.ts
@@ -523,7 +524,7 @@ D1–D10 已完成（2026-11-05），全部用真实 Key 验证过，`pnpm e2e` 
 - D4 画面：暂停在 12s 问「这页写的什么」，2.7s 答出「ChatGPT (2022.11.30)」并带 `[00:12]`；截图时自动隐藏弹幕层。
 - D5 大纲四路兜底：字幕 → UP 章节（秒出）→ ASR → 抽帧；`BV1FW9ZBhEEN` 章节 7 段 5.8s，`BV1XnxP6vEdX` 抽帧 6 段 6.5s。
 - D6 落盘：零依赖 companion，落 `videos/<bvid>/course.json|md`、`p<N>.json|md`。
-- D7 DSH 技能：`.dsh/skills/video-tutor/`，`list` / `show` / `search`。
+- D7 DSH 技能：`.dsh/skills/suitang/`，`list` / `show` / `search`。
 - D9 ASR（A 路径）：硅基流动 SenseVoiceSmall，480s → 7.1s / 175 句，无时间戳、按句均分。
 - D10 成本：回答行尾 `≈¥0.0014`，今日/本月账本 + 余额。
 

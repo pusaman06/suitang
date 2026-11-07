@@ -52,7 +52,7 @@ test.describe('D2 字幕抓取', () => {
     await context?.close();
   });
   test('设置页诊断能拉到字幕并写进 chrome.storage.local', async () => {
-    const host = page.locator('#video-tutor-host');
+    const host = page.locator('#suitang-host');
     await expect(host, '悬浮球没注入，检查 content script 是否加载').toBeAttached({ timeout: 60_000 });
 
     await host.locator('.vt-ball').click();

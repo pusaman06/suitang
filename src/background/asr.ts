@@ -2,7 +2,7 @@
 
 import type { AsrErrorCode } from '../shared/asr';
 
-const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
+const log = (...args: unknown[]) => console.log('[suitang]', ...args);
 
 export const ASR_REFERER_RULE_ID = 7101;
 export const ASR_MAX_AUDIO_BYTES = 45 * 1024 * 1024;

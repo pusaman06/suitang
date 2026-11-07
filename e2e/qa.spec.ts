@@ -361,7 +361,7 @@ test('提问不打断播放，面板也不闪一下', async () => {
     const vis: string[] = [];
     scope.__vis = vis;
     const panel = document
-      .getElementById('video-tutor-host')
+      .getElementById('suitang-host')
       ?.shadowRoot?.querySelector<HTMLElement>('.vt-panel');
     if (!panel) return;
     vis.push(panel.style.visibility || '');

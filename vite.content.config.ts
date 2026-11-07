@@ -7,7 +7,7 @@ export default defineConfig({
     emptyOutDir: false,
     lib: {
       entry: resolve(process.cwd(), 'src/content/index.ts'),
-      name: 'VideoTutorContent',
+      name: 'SuitangContent',
       formats: ['iife'],
       fileName: () => 'content.js',
     },

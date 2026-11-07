@@ -6,7 +6,7 @@
  * data/videos/<bvid>/course.json + course.md / p<N>.json + p<N>.md。
  *
  * 用法：
- *   node companion/server.mjs [--port 8787] [--dir D:\project\video-tutor\data]
+ *   node companion/server.mjs [--port 8787] [--dir D:\project\suitang\data]
  */
 import http from 'node:http';
 import { promises as fs } from 'node:fs';

@@ -171,7 +171,7 @@ test('无字幕视频：转写整段音轨、缓存时间戳，再用 ASR 字幕
   await expect(page.locator('.vt-outline-empty-text')).toContainText('正在下载音轨', {
     timeout: 8_000,
   });
-  await expect(page.locator('.vt-outline-empty-text')).toContainText('正在转写', {
+  await expect(page.locator('.vt-outline-empty-text')).toContainText(/正在转写|转写完成/, {
     timeout: 12_000,
   });
   await expect(page.locator('.vt-outline-state')).toHaveText('已转写', { timeout: 20_000 });

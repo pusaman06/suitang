@@ -150,9 +150,10 @@ test('带画面提问：请求 content 是 image_url 数组且 detail=high', asy
   expect(subtitles.ok, subtitles.error).toBe(true);
 
   // 暂停到有内容的帧，并让悬浮球进入暂停高亮状态。
+  await page.waitForSelector('video', { timeout: 30_000 });
   await page.evaluate(async () => {
     const video = document.querySelector('video');
-    if (!video) return;
+    if (!video) throw new Error('页面里没有 video 元素');
     video.pause();
     video.currentTime = 12;
     await new Promise<void>(resolve => {

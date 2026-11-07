@@ -89,7 +89,7 @@ import { appendQaRecord, clearQaStore, readQaStore } from '../shared/qa-store';
 import { estimateCostCny } from '../shared/cost';
 import { readLedger, recordUsage } from '../shared/usage-store';
 
-const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
+const log = (...args: unknown[]) => console.log('[suitang]', ...args);
 
 const metaCache = new Map<string, VideoMeta>();
 

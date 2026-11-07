@@ -60,7 +60,7 @@ export async function hasLoginCookie(context: BrowserContext): Promise<boolean> 
 
 /** 只收集我们自己代码的报错；B 站页面自身的广告/埋点噪音不算。 */
 export function isOursError(text: string): boolean {
-  return /video-tutor|chrome-extension:\/\//.test(text);
+  return /suitang|chrome-extension:\/\//.test(text);
 }
 
 export async function clearStorage(context: BrowserContext, extensionId: string): Promise<void> {

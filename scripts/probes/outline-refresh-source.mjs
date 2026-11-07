@@ -12,7 +12,7 @@ import { chromium } from '@playwright/test';
 import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const root = 'D:\\project\\video-tutor';
+const root = 'D:\\project\\suitang';
 const dist = resolve(root, 'dist');
 const profile = resolve(root, '.e2e', 'profile');
 const shots = resolve(root, 'e2e', 'screenshots');

@@ -2,7 +2,7 @@ import { chromium } from '@playwright/test';
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const root = 'D:\\project\\video-tutor';
+const root = 'D:\\project\\suitang';
 const dist = resolve(root, 'dist');
 const profile = resolve(root, '.e2e', 'profile');
 const kbNoteDir = 'D:\\knowledge-base\\20-知识笔记';
@@ -35,7 +35,7 @@ const context = await chromium.launchPersistentContext(profile, {
 
 const readState = async target =>
   target.evaluate(() => {
-    const host = document.getElementById('video-tutor-host');
+    const host = document.getElementById('suitang-host');
     const rootEl = host?.shadowRoot ?? null;
     return {
       state: rootEl?.querySelector('.vt-outline-state')?.textContent?.trim() ?? '',
@@ -116,7 +116,7 @@ try {
   await page.locator('.vt-kb-confirm').click();
   await page.waitForFunction(
     () => {
-      const host = document.getElementById('video-tutor-host');
+      const host = document.getElementById('suitang-host');
       const status = host?.shadowRoot?.querySelector('.vt-status');
       return !!status && /已存入|已覆盖/.test(status.textContent ?? '');
     },

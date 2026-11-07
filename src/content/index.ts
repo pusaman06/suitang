@@ -1,7 +1,7 @@
 import { waitForVideoInfo } from './page';
 import { mountUi, type UiHandle } from './ui';
 
-const HOST_ID = 'video-tutor-host';
+const HOST_ID = 'suitang-host';
 
 let handle: UiHandle | null = null;
 let booting = false;
