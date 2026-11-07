@@ -5,7 +5,6 @@ import type { AsrErrorCode } from '../shared/asr';
 export const ASR_REFERER_RULE_ID = 7101;
 export const ASR_MAX_AUDIO_BYTES = 45 * 1024 * 1024;
 export const ASR_MAX_AUDIO_SECONDS = 3600;
-export const ASR_DEFAULT_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 
 export class AsrFailure extends Error {
   constructor(

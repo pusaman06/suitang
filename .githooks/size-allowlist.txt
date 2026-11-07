@@ -1,0 +1,6 @@
+src/background/index.ts
+src/content/ui.ts
+docs/archive/plan-v0.1.md
+pnpm-lock.yaml
+e2e/outline.spec.ts
+companion/server.mjs

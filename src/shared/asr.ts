@@ -42,15 +42,6 @@ export interface AsrError {
   message: string;
 }
 
-export interface AsrTranscribeRequest {
-  type: 'asr:transcribe';
-  bvid: string;
-  p: number;
-  cid?: number;
-  title?: string;
-  duration?: number;
-}
-
 export type AsrTranscribeResponse =
   | { ok: true; cached?: boolean }
   | { ok: false; code: AsrErrorCode; message: string };

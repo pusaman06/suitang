@@ -4,9 +4,6 @@
  */
 
 export const QA_PORT_NAME = 'vt-qa';
-export const QA_PROTOCOL_VERSION = 1;
-/** thinking 关闭时的采样温度；thinking 模式下服务端会忽略它。 */
-export const QA_TEMPERATURE = 0.3;
 /** 视频可见面积 / 视频面积低于该值就不带画面，避免截到半张图。 */
 export const QA_MIN_VISIBLE_RATIO = 0.5;
 
@@ -31,13 +28,6 @@ export interface QaViewport {
   width: number;
   height: number;
 }
-
-/** 大纲抽帧时由 content 请求 background 截一张当前画面（不经过问答 port）。 */
-export type FrameCaptureRequest = {
-  type: 'frame:capture';
-  rect: QaRect;
-  viewport: QaViewport;
-};
 
 export type FrameCaptureResponse =
   | { ok: true; frame: QaFrame }

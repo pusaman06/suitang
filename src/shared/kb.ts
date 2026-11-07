@@ -2,9 +2,6 @@ import type { OutlineSegment } from './outline';
 import type { VideoInfo } from './types';
 import type { CompanionPage } from './video-record';
 
-/** 个人知识库的落库规则，见 D:\knowledge-base\_模板\视频笔记.md。 */
-export const KB_NOTE_SUBDIR = '20-知识笔记';
-
 /**
  * 原文底稿目录。插件把 `50-底稿` 硬编码进索引排除列表，所以放这里的 md
  * 既不会被搜到、也不报缺陷，只能从索引卡的链接点进来。

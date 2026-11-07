@@ -1,7 +1,7 @@
 # Video Tutor
 
 B 站看课助手：暂停提问，AI 结合字幕与当前画面回答，并给出可点击的时间戳；也能按字幕生成大纲。
-技术方案见 [`docs/plan.md`](docs/plan.md)，路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
+技术方案见 [`docs/archive/plan-v0.1.md`](docs/archive/plan-v0.1.md)（2026-11-05 的设计推演，已归档），路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## 现在能做什么
 

@@ -1,8 +1,5 @@
 import type { SubtitleCue } from './types';
 
-/** 大纲缓存格式版本；结构不兼容时直接丢弃旧缓存。 */
-export const OUTLINE_SCHEMA = 2;
-
 /** 这一段字幕从哪来：影响时间戳是否可信（ASR 的是估算值）。 */
 export type OutlineCaption = 'subtitle' | 'asr' | 'chapters' | 'frames';
 

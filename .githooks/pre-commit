@@ -1,0 +1,30 @@
+#!/bin/sh
+# 拒绝把超过 20 KB 的文件提交进来：逼着把模块拆小，而不是让 agent 往一个文件里堆。
+# 例外写在 .githooks/size-allowlist.txt（一行一个相对路径）。
+# 安装：git config core.hooksPath .githooks
+LIMIT=20480
+ALLOWLIST_FILE=".githooks/size-allowlist.txt"
+fail=0
+
+list=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$list" ] && exit 0
+
+for file in $list; do
+  [ -f "$file" ] || continue
+  size=$(git cat-file -s ":$file" 2>/dev/null)
+  [ -z "$size" ] && continue
+  [ "$size" -le "$LIMIT" ] && continue
+  if [ -f "$ALLOWLIST_FILE" ] && grep -qxF "$file" "$ALLOWLIST_FILE"; then
+    continue
+  fi
+  kb=$((size / 1024))
+  echo "[size-guard] $file is ${kb} KB, over the 20 KB limit." >&2
+  echo "[size-guard] Split it into modules, or allow it in $ALLOWLIST_FILE." >&2
+  fail=1
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo "[size-guard] Commit rejected. Fix the files above and retry." >&2
+  exit 1
+fi
+exit 0
