@@ -51,5 +51,21 @@ src/options/     设置页（API Key / 模型 / 预算）
 src/shared/      类型、协议、提示词、解析
 public/          manifest 与静态资源
 e2e/             Playwright 用例（mock + 真实 Key 两套）
-companion/       本地小服务（目前只服务已冻结的知识库链路）
+companion/       本地小服务：把大纲与原文底稿写进个人知识库（`pnpm companion`）
 ```
+
+## 存到知识库（可选）
+
+大纲生成后，面板底部有「存到知识库」：先预览（标题 / 摘要 / 关键词可改），再写入。
+文件名是 `<分 P 标题或视频标题>（BV号-pNN）.md`，同一分 P 再存是覆盖更新；字幕全文单独落到
+`50-底稿/视频原文/<BV号>/<BV号>-pNN.md`。
+
+需要本机跑一个 companion 小服务（默认 `127.0.0.1:8787`）：
+
+```powershell
+pnpm companion
+```
+
+## 协议
+
+[MIT](LICENSE)
