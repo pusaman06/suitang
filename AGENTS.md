@@ -14,7 +14,7 @@ B 站看课助手（MV3 扩展 + 本地 companion）。说明见 [README.md](REA
 
 ## 目录
 
-- `src/background/` — service worker：字幕 / ASR / 大纲 / 问答 / 知识库（已冻结）
+- `src/background/` — service worker：字幕 / ASR / 大纲 / 问答 / 知识库写入
 - `src/content/` — 面板 UI（shadow DOM）与页面抓取
 - `src/shared/` — 类型、提示词、解析、缓存键
 - `e2e/` — Playwright 用例；`real-*.spec.ts` 走真实 B 站与模型
