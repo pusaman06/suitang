@@ -19,3 +19,18 @@ node scripts/probes/spa-video-switch.mjs
 ```
 
 通过时最后一行是 `RESULT ok`，日志同时写到 `scripts/probes/spa-video-switch.log`。
+
+## kb-save-real.mjs
+
+真实走一遍「存到知识库」：打开 `BV19n4h6VENS` → 生成大纲（没有字幕会先自动转写）
+→ 点「存到知识库」→ 看草稿 → 写入 → 核对知识库里：
+
+- 索引卡文件名是 `<分 P 标题>（BV19n4h6VENS-p01）.md`（不带日期）；
+- 状态行是「已存入 / 已覆盖 …（约 8 秒后可搜到）」；
+- 需要本机 `pnpm companion` 在跑（默认 8787）。
+
+```powershell
+node scripts/probes/kb-save-real.mjs
+```
+
+日志写到 `test-results/kb-save-real.log`，截图 `e2e/screenshots/d13-kb-real-*.png`。

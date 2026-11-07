@@ -88,13 +88,21 @@ function safeName(raw: string): string {
 }
 
 /**
- * 文件名：`<本地日期>-<视频标题>（<BV号>）.md`。
- * 带上 BV 号是因为课程里同名视频很常见（「第 1 讲」这种）。
+ * 索引卡文件名：`<标题>（<BV号>-p<NN>）.md`。
+ * - 多 P 视频共用同一个 BV 号，必须带 p 号，否则不同分 P 会互相覆盖；
+ * - 不带日期：同一分 P 再存就是覆盖更新，不会堆出「11-06 / 11-07」两份；
+ * - 多 P 时标题用分 P 名（`02. Python启航-初识Python`），单 P 用视频标题。
+ * **这是唯一一处命名规则**：扩展生成文件名，companion 只负责校验和落盘。
  */
-export function kbFileName(input: { title: string; bvid: string; now?: Date }): string {
-  const date = localDate(input.now);
-  const title = safeName(input.title).slice(0, 40) || input.bvid;
-  const file = `${date}-${title}（${input.bvid}）.md`;
+export function kbFileName(input: {
+  title: string;
+  bvid: string;
+  p?: number;
+  partTitle?: string;
+}): string {
+  const p = Number.isInteger(input.p) && (input.p ?? 0) > 0 ? (input.p as number) : 1;
+  const base = safeName((input.partTitle ?? '').trim() || input.title).slice(0, 40) || input.bvid;
+  const file = `${base}（${input.bvid}-p${String(p).padStart(2, '0')}）.md`;
   return safeName(file).replace(/\.md$/, '') + '.md';
 }
 
@@ -137,12 +145,17 @@ export function buildKbMarkdown(input: KbNoteInput): string {
   lines.push('## 基本信息');
   lines.push('');
   const meta: string[] = [title];
+  if (info.partTitle && (info.pageCount ?? 0) > 1) meta.push(info.partTitle);
   if (info.owner) meta.push(`UP：${info.owner}`);
   if (info.duration && info.duration > 0) meta.push(formatClock(info.duration));
   const part = info.pageCount && info.pageCount > 1 ? `第 ${info.p} P / 共 ${info.pageCount} P` : '';
   if (part !== '') meta.push(part);
   lines.push(`- 视频：${meta.join(' · ')}`);
-  lines.push(`- 链接：https://www.bilibili.com/video/${info.bvid}/`);
+  const link =
+    (info.pageCount ?? 0) > 1
+      ? `https://www.bilibili.com/video/${info.bvid}/?p=${info.p}`
+      : `https://www.bilibili.com/video/${info.bvid}/`;
+  lines.push(`- 链接：${link}`);
   lines.push(`- 存入：${localDate(now)}`);
   lines.push('');
 
@@ -190,7 +203,7 @@ export function buildKbMarkdown(input: KbNoteInput): string {
   lines.push('');
 
   if (input.noSubtitle) {
-    lines.push('> 这个视频没有字幕，所以没有核心结论；大纲来自 UP 章节或画面截图。');
+    lines.push('> 这个视频没有可用字幕，所以没有核心结论；大纲来自画面截图。');
     lines.push('');
   }
 

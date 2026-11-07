@@ -159,8 +159,8 @@ test('长视频 BV1aRxX6iE7h（52:08）转写并生成大纲', async () => {
     expect(details.filter(text => text !== '').length).toBeGreaterThanOrEqual(3);
     expect(conclusions.length).toBeGreaterThanOrEqual(1);
 
-    // 知识库入口已隐藏（D9 冻结），这里只验证大纲能出来。
-    await expect(page.locator('.vt-kb-open')).toHaveCount(0);
+    // 知识库入口 2026-11-07 已恢复，这里顺便确认按钮在。
+    await expect(page.locator('.vt-kb-open')).toHaveCount(1);
   } finally {
     await clearStorage(context, extensionId).catch(() => undefined);
     await context.close();

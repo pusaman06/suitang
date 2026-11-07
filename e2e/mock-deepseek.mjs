@@ -7,6 +7,12 @@ import http from 'node:http';
 export const DEFAULT_ANSWER =
   '结论：这段在讲变量赋值 [00:12]。\n补充：没有更多内容。\n测试全文结束。';
 
+/** `kb:draft` 的摘要请求：一句话摘要 + 关键词。 */
+export const DEFAULT_KB_ANSWER = JSON.stringify({
+  summary: '测试摘要：这期讲了 Python 入门基础。',
+  keywords: ['Python', '入门'],
+});
+
 // 9 段，覆盖到 900s；parseOutline 会按时长 clamp 末段。
 export const DEFAULT_OUTLINE_ANSWER = JSON.stringify([
   { start: 0, end: 100, title: '课程介绍与学习路线' },
@@ -40,6 +46,14 @@ function isOutlineRequest(body) {
 /** 抽帧大纲请求：大纲的 system 提示 + user 里夹了 image_url。问答带图不算。 */
 function isFrameRequest(body) {
   return isOutlineRequest(body) && countFrameImages(body) > 0;
+}
+
+/** 知识库摘要请求（`kb:draft` 的「一句话摘要 + 关键词」）。 */
+function isKbSummaryRequest(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  return messages.some(
+    message => typeof message?.content === 'string' && message.content.includes('知识库条目'),
+  );
 }
 
 /** 细节请求（第二轮补说明）：user 里带「## 第 1 段」，不消耗大纲答案队列。 */
@@ -137,7 +151,9 @@ export function createMockServer() {
             ? isDetailRequest(body)
               ? state.outlineAnswer
               : nextOutlineAnswer()
-            : state.answer;
+            : isKbSummaryRequest(body)
+              ? DEFAULT_KB_ANSWER
+              : state.answer;
       // 切成 6 字左右的小片，模拟逐字返回。
       while (rest.length > 0) {
         pieces.push(rest.slice(0, 6));

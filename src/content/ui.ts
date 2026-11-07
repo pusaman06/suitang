@@ -82,6 +82,9 @@ export function mountUi(info: VideoInfo): UiHandle {
             <button class="vt-outline-refresh" type="button" title="按字幕重新生成">
               重新生成
             </button>
+            <button class="vt-kb-open" type="button" title="把这期视频的资料存进个人知识库">
+              存到知识库
+            </button>
           </div>
           <div class="vt-outline-error" hidden>
             <span class="vt-outline-error-text"></span>
@@ -103,6 +106,17 @@ export function mountUi(info: VideoInfo): UiHandle {
         <textarea class="vt-input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="vt-actions">
           <button class="vt-send">发送</button>
+        </div>
+      </div>
+      <div class="vt-kb" hidden>
+        <div class="vt-kb-head">
+          <span class="vt-kb-title">存到知识库</span>
+          <span class="vt-kb-hint"></span>
+        </div>
+        <textarea class="vt-kb-preview" rows="8" spellcheck="false"></textarea>
+        <div class="vt-kb-foot">
+          <button class="vt-kb-confirm" type="button">写入知识库</button>
+          <button class="vt-kb-cancel" type="button">取消</button>
         </div>
       </div>
     </section>`;
@@ -133,6 +147,12 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineErrorText = must<HTMLElement>(shadow, '.vt-outline-error-text');
   const outlineRetry = must<HTMLButtonElement>(shadow, '.vt-outline-retry');
   const outlineRetrySubtitles = must<HTMLButtonElement>(shadow, '.vt-outline-retry-subtitles');
+  const kbOpen = must<HTMLButtonElement>(shadow, '.vt-kb-open');
+  const kbBox = must<HTMLElement>(shadow, '.vt-kb');
+  const kbPreview = must<HTMLTextAreaElement>(shadow, '.vt-kb-preview');
+  const kbHint = must<HTMLElement>(shadow, '.vt-kb-hint');
+  const kbConfirm = must<HTMLButtonElement>(shadow, '.vt-kb-confirm');
+  const kbCancel = must<HTMLButtonElement>(shadow, '.vt-kb-cancel');
   const status = must<HTMLElement>(shadow, '.vt-status');
   const usageLine = must<HTMLButtonElement>(shadow, '.vt-usage');
   const answers = must<HTMLElement>(shadow, '.vt-answers');
@@ -189,6 +209,125 @@ export function mountUi(info: VideoInfo): UiHandle {
   let asrRunToken = 0;
   let asrSegments = 0;
   let asrKey = outlineInfoKey(info);
+
+  /* -------- 存到知识库：先出草稿，确认才写盘 -------- */
+
+  let kbBusy = false;
+  let kbFileName = '';
+  /** 原文底稿（字幕 + 大纲 + 问答），确认时和索引卡一起写进知识库。 */
+  let kbSourceMarkdown = '';
+
+  const draftKb = async (): Promise<void> => {
+    if (kbBusy) return;
+    if (!outline || outline.segments.length === 0) {
+      status.textContent = '先生成大纲，再存到知识库';
+      return;
+    }
+    kbBusy = true;
+    kbOpen.disabled = true;
+    kbOpen.textContent = '生成中…';
+    try {
+      const history = (await chrome.runtime.sendMessage({
+        type: 'qa:history',
+        bvid: currentInfo.bvid,
+        p: currentInfo.p,
+      })) as { ok?: boolean; records?: QaRecord[] } | undefined;
+      const qa = (history?.records ?? []).map(record => ({
+        question: record.question,
+        answer: record.answer,
+      }));
+      const response = (await chrome.runtime.sendMessage({
+        type: 'kb:draft',
+        info: currentInfo,
+        segments: outline?.segments ?? [],
+        qa,
+      })) as
+        | {
+            ok?: boolean;
+            fileName?: string;
+            markdown?: string;
+            sourceMarkdown?: string;
+            usedModel?: boolean;
+            message?: string;
+          }
+        | undefined;
+      if (!response?.ok) {
+        status.textContent = response?.message ?? '生成笔记草稿失败';
+        return;
+      }
+      kbFileName = response.fileName ?? '';
+      kbSourceMarkdown = response.sourceMarkdown ?? '';
+      kbPreview.value = response.markdown ?? '';
+      kbHint.textContent = response.usedModel
+        ? `${kbFileName} · 摘要由模型生成，可直接改；原文底稿一并存入 50-底稿`
+        : `${kbFileName} · 没配 API Key，只有资料没有摘要；原文底稿一并存入 50-底稿`;
+      kbBox.hidden = false;
+      kbBox.scrollIntoView({ block: 'start' });
+      kbPreview.focus();
+      // focus() 会把光标带到末尾并滚动，这里强制回到开头。
+      kbPreview.setSelectionRange(0, 0);
+      kbPreview.scrollTop = 0;
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : '生成笔记草稿失败';
+    } finally {
+      kbBusy = false;
+      kbOpen.disabled = !outline || outline.segments.length === 0;
+      kbOpen.textContent = '存到知识库';
+    }
+  };
+
+  kbOpen.addEventListener('click', () => {
+    void draftKb();
+  });
+
+  kbCancel.addEventListener('click', () => {
+    kbBox.hidden = true;
+    kbPreview.value = '';
+    kbFileName = '';
+    kbSourceMarkdown = '';
+  });
+
+  kbConfirm.addEventListener('click', () => {
+    if (kbBusy) return;
+    if (kbPreview.value.trim() === '') {
+      kbHint.textContent = '内容为空，没什么可存的';
+      return;
+    }
+    kbBusy = true;
+    kbConfirm.disabled = true;
+    kbConfirm.textContent = '写入中…';
+    void chrome.runtime
+      .sendMessage({
+        type: 'kb:save',
+        fileName: kbFileName,
+        markdown: kbPreview.value,
+        sourceMarkdown: kbSourceMarkdown,
+        bvid: currentInfo.bvid,
+        p: currentInfo.p,
+      })
+      .then(response => {
+        const result = response as
+          | { ok?: boolean; relative?: string; overwrote?: boolean; source?: string; message?: string }
+          | undefined;
+        if (!result?.ok) {
+          kbHint.textContent = result?.message ?? '写入失败';
+          return;
+        }
+        kbBox.hidden = true;
+        kbPreview.value = '';
+        kbSourceMarkdown = '';
+        const sourceTail = result.source ? `；原文存到 ${result.source}` : '';
+        status.textContent = `${result.overwrote ? '已覆盖' : '已存入'} ${result.relative}${sourceTail}（约 8 秒后可搜到）`;
+      })
+      .catch(error => {
+        kbHint.textContent = error instanceof Error ? error.message : '写入失败';
+      })
+      .finally(() => {
+        kbBusy = false;
+        kbConfirm.disabled = false;
+        kbConfirm.textContent = '写入知识库';
+      });
+  });
 
   void loadSettings().then(next => {
     settings = next;
@@ -501,6 +640,8 @@ export function mountUi(info: VideoInfo): UiHandle {
         : '');
     outlineDiag.textContent = diag;
     outlineDiag.hidden = !(settings?.diagnostics ?? true) || diag === '';
+    // 没有大纲就没有笔记可存；有问答但没大纲时也不给存（内容太单薄）。
+    kbOpen.disabled = !outline || outline.segments.length === 0;
     if (outline) {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;

@@ -1830,7 +1830,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({
         ok: true,
-        fileName: kbFileName({ title: info.title, bvid: info.bvid, now }),
+        fileName: kbFileName({
+          title: info.title,
+          partTitle: info.partTitle,
+          bvid: info.bvid,
+          p: info.p,
+        }),
         markdown: buildKbMarkdown({
           info,
           segments: noteSegments,

@@ -20,13 +20,30 @@ const segments: OutlineSegment[] = [
   { start: 120, end: 891, title: '现场演示' },
 ];
 
-test('文件名用本地日期，并对 Windows 非法字符做替换', () => {
-  // 本地 2026-11-05 23:30；UTC 已经是 11-06，取本地才不会错位。
-  const now = new Date(2026, 10, 5, 23, 30, 0);
-  const name = kbFileName({ title: 'A/B: 测试?<视频>', bvid: 'BV1xx', now });
-  expect(name).toBe('2026-11-05-A-B- 测试--视频-（BV1xx）.md');
-  expect(name.includes('/')).toBe(false);
-  expect(name.includes(':')).toBe(false);
+test('文件名是 <标题>（BV号-p<NN>）.md，多 P 不互相覆盖', () => {
+  const single = kbFileName({ title: 'A/B: 测试?<视频>', bvid: 'BV1xx', p: 1 });
+  expect(single).toBe('A-B- 测试--视频-（BV1xx-p01）.md');
+  expect(single.includes('/')).toBe(false);
+  expect(single.includes(':')).toBe(false);
+  // 不再带日期：同一分 P 再存就是覆盖更新，不会堆出两份。
+  expect(/\d{4}-\d{2}-\d{2}/.test(single)).toBe(false);
+
+  // 多 P 共用 BV 号，靠 p 号 + 分 P 标题区分。
+  const p2 = kbFileName({
+    title: '黑马程序员Python+AI零基础入门到大神全套视频课程',
+    partTitle: '02. Python启航-初识Python',
+    bvid: 'BV1sHU9BmEne',
+    p: 2,
+  });
+  expect(p2).toBe('02. Python启航-初识Python（BV1sHU9BmEne-p02）.md');
+  const p3 = kbFileName({
+    title: '黑马程序员Python+AI零基础入门到大神全套视频课程',
+    partTitle: '03. 循环',
+    bvid: 'BV1sHU9BmEne',
+    p: 3,
+  });
+  expect(p2).not.toBe(p3);
+  expect(p3.includes('p03')).toBe(true);
 });
 
 test('localDate 按本地时区取日期', () => {
