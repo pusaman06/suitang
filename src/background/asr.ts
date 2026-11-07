@@ -2,6 +2,8 @@
 
 import type { AsrErrorCode } from '../shared/asr';
 
+const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
+
 export const ASR_REFERER_RULE_ID = 7101;
 export const ASR_MAX_AUDIO_BYTES = 45 * 1024 * 1024;
 export const ASR_MAX_AUDIO_SECONDS = 3600;
@@ -265,9 +267,13 @@ export async function getAudioTrack(
 ): Promise<AudioTrack> {
   const page = await readPageAudio(tabId, aid, cid, bvid, duration);
   if (page?.stale) {
-    throw new AsrFailure('stale', page.error ?? '播放地址和当前分 P 不一致，请稍后重试');
+    // 页面 SSR 状态没跟上（SPA 换视频 / 换 P 后 __INITIAL_STATE__ 还是上一个的）：
+    // 页面音轨可能是上一个视频的，不能直接用；但也不该直接失败——后台 playurl
+    // 按 aid + cid 直接要地址，不依赖页面状态。用户反馈的「换 P 后有时报
+    // 播放地址和当前分 P 不一致、刷新一下就好」就是这条路径。
+    log('page audio stale, falling back to playurl', page.error);
   }
-  if (page?.audios?.length) {
+  if (page && !page.stale && page.audios?.length) {
     const [first, ...rest] = page.audios;
     return { ...first, alternates: rest.map(item => item.url) };
   }
