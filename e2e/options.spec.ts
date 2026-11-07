@@ -27,6 +27,8 @@ test('设置页：显示缓存占用，一键清空', async () => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${id}/src/options/index.html`);
 
+  // 先清空，避免上一个 spec 留下的转写 / 大纲缓存影响「已缓存几个视频」。
+  await page.evaluate(() => chrome.storage.local.clear());
   // 造两条缓存：一个视频的字幕 + 页面记录。
   await page.evaluate(() => {
     return chrome.storage.local.set({
@@ -45,7 +47,7 @@ test('设置页：显示缓存占用，一键清空', async () => {
   await expect(page.locator('#cache-summary')).toHaveText('还没有缓存');
 
   const left = await page.evaluate(() => chrome.storage.local.get(null));
-  expect(Object.keys(left).filter(key => /^(qa|sub|page):/.test(key))).toEqual([]);
+  expect(Object.keys(left).filter(key => /^(qa|sub|page|outline|asr):/.test(key))).toEqual([]);
 
   await page.screenshot({ path: resolve(SHOT_DIR, 'options-cache-cleared.png'), fullPage: false });
   await context.close();

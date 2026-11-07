@@ -484,9 +484,21 @@ export function mountUi(info: VideoInfo): UiHandle {
         : '生成中…'
       : '生成大纲';
     // 测试期诊断：一行小字说清这份大纲靠什么生成。设置里可以关。
-    // 老缓存里没有 captionDetail，提示一下，别让人以为丢了什么。
+    // 老缓存里没有 captionDetail，就把能确定的来源（模型、生成时间）显示出来。
     const diag =
-      outline?.captionDetail ?? (outline ? '本地缓存的大纲（点「重新生成」可查看来源）' : '');
+      outline?.captionDetail ??
+      (outline
+        ? `本地缓存的大纲 · ${outline.model || '未知模型'}${
+            outline.createdAt
+              ? ` · ${new Date(outline.createdAt).toLocaleString('zh-CN', {
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : ''
+          }（点「重新生成」更新来源）`
+        : '');
     outlineDiag.textContent = diag;
     outlineDiag.hidden = !(settings?.diagnostics ?? true) || diag === '';
     if (outline) {
@@ -743,7 +755,10 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineCapturing = false;
       outlineCaptureDone = 0;
       outlineCaptureTotal = 0;
-      setOutlineError(message, () => void generateOutline(mode, options));
+      setOutlineError(
+        outline ? `${message}（当前显示的仍是本地缓存的大纲）` : message,
+        () => void generateOutline(mode, options),
+      );
     };
 
     try {
