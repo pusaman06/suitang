@@ -269,9 +269,11 @@ export function parseOutline(
     if (usableLines && startLine !== null && endLine !== null) {
       const from = Math.min(startLine, usableLines.length - 1);
       const to = Math.min(endLine, usableLines.length - 1);
-      if (to > from) {
+      if (to >= from) {
         start = usableLines[from].from;
         // end_line 是「最后一行」，这一段到下一行开始为止；末行就落到片尾。
+        // 允许 start_line === end_line（一行一段）：字幕行很少时模型会这么写，
+        // 参照 Bilitato normalizeSegments 的 endLine >= startLine 判定。
         end = to + 1 < usableLines.length ? usableLines[to + 1].from : limit || usableLines[to].from + 1;
       }
     }
@@ -310,7 +312,12 @@ export function parseOutline(
   // 旧条件写成「缺口小于 30 秒才补」，等于缺口越大越不补，正好写反了。
   if (limit > 0 && lastSegment.end < limit) lastSegment.end = limit;
 
-  if (segments.length < range.min) return null;
+  // 字幕行很少（自动转写只拿到几句）时模型只能切出很少几段，硬卡 range.min
+  // 会把一份合法大纲判成「格式不对」。段数下限按可用行数收敛：3 行只要求 1 段。
+  const minSegments = usableLines
+    ? Math.min(range.min, Math.max(1, Math.floor(usableLines.length / 2)))
+    : range.min;
+  if (segments.length < minSegments) return null;
   // 模型经常按字幕粒度切得太碎（比如 42 分钟切 27 段）。硬拒不如合并：
   // 均匀分组，组内首尾相接，标题取组里第一段的。
   return coalesceSegments(segments, range.max);

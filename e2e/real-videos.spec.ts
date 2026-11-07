@@ -226,6 +226,83 @@ test('多 P BV1sHU9BmEne 在 P2 转写不再误报分 P 不一致', async () => 
   }
 });
 
+/**
+ * 待办 3e：BV1ECQ9B5EKe 的 P6（B 站 AI 字幕整段只有 19 行「♪ 音乐 ♪」）。
+ * 旧行为：拿音乐标记去切段，模型只能胡编，最后报「模型输出格式不对」。
+ * 新行为：识别出「没有可用文字」→ 当作没字幕，自动转写后重试；转写也没人声就如实提示。
+ */
+test('字幕只有音乐标记的分 P 不报格式错', async () => {
+  test.setTimeout(600_000);
+  const sfKey = process.env.SILICONFLOW_KEY ?? '';
+  const dsKey = process.env.DS_KEY ?? '';
+  test.skip(sfKey === '' || dsKey === '', '需要 .env 里的 SILICONFLOW_KEY 和 DS_KEY');
+
+  const context = await launchWithExtension();
+  const extensionId = await getExtensionId(context);
+  try {
+    expect(await hasLoginCookie(context)).toBe(true);
+    await clearStorage(context, extensionId);
+    await writeSettings(context, extensionId, {
+      apiKey: dsKey,
+      apiBaseUrl: 'https://api.deepseek.com',
+      textModel: 'deepseek-flash',
+      visionModel: 'deepseek-flash',
+      thinking: false,
+      frameEnabled: false,
+      asrApiKey: sfKey,
+      asrBaseUrl: 'https://api.siliconflow.cn/v1',
+      asrModel: 'FunAudioLLM/SenseVoiceSmall',
+    });
+
+    const page = await context.newPage();
+    for (const worker of context.serviceWorkers()) {
+      worker.on('console', msg => console.log('[SW] ' + msg.text()));
+    }
+    context.on('serviceworker', worker => {
+      worker.on('console', msg => console.log('[SW] ' + msg.text()));
+    });
+    await page.goto('https://www.bilibili.com/video/BV1ECQ9B5EKe/?p=6', {
+      waitUntil: 'domcontentloaded',
+    });
+    await expect(page.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+    await page.locator('.vt-ball').click();
+    await expect(page.locator('.vt-panel')).toBeVisible();
+    await expect(page.locator('.vt-part')).toContainText('P6', { timeout: 30_000 });
+    await page.waitForTimeout(3000);
+    console.log('===MUSIC-IDS=== ' + (await page.locator('.vt-ids').innerText().catch(() => '?')));
+
+    await page.locator('.vt-outline-generate').click();
+    const t0 = Date.now();
+    let stateText = '';
+    let noticeText = '';
+    let errorText = '';
+    const deadline = Date.now() + 420_000;
+    while (Date.now() < deadline) {
+      stateText = (await page.locator('.vt-outline-state').innerText().catch(() => '')).trim();
+      noticeText = (await page.locator('.vt-outline-empty-text').innerText().catch(() => '')).trim();
+      errorText = (await page.locator('.vt-outline-error-text').innerText().catch(() => '')).trim();
+      if (/^\d+ 段$/.test(stateText)) break;
+      if (/没检测到人声|只有音乐\/环境声/.test(noticeText + errorText)) break;
+      await page.waitForTimeout(2000);
+    }
+    console.log(`===MUSIC-STATE=== ${JSON.stringify(stateText)} (${Date.now() - t0}ms)`);
+    console.log(`===MUSIC-NOTICE=== ${JSON.stringify(noticeText)}`);
+    console.log(`===MUSIC-ERROR=== ${JSON.stringify(errorText)}`);
+    const itemCount = await page.locator('.vt-outline-item').count();
+    console.log(`===MUSIC-ITEMS=== ${itemCount}`);
+    await page.screenshot({ path: join(SHOT_DIR, 'd10-music-subtitle.png') });
+
+    // 关键：不能再拿音乐标记去硬切、报「模型输出格式不对」。
+    const allText = `${stateText} ${noticeText} ${errorText}`;
+    expect(allText).not.toContain('格式不对');
+    expect(/^\d+ 段$/.test(stateText) || /没检测到人声|只有音乐\/环境声/.test(allText)).toBe(true);
+    if (/^\d+ 段$/.test(stateText)) expect(itemCount).toBeGreaterThan(0);
+  } finally {
+    await clearStorage(context, extensionId).catch(() => undefined);
+    await context.close();
+  }
+});
+
 async function fetchCompanionStatus(): Promise<{ kbDir?: string } | null> {
   try {
     const response = await fetch('http://127.0.0.1:8787/api/kb/status');

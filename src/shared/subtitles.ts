@@ -59,6 +59,23 @@ export function parseSubtitleBody(text: string): SubtitleCue[] {
     .filter(item => item.content.length > 0);
 }
 
+/**
+ * 「♪ 音乐 ♪」「[掌声]」这类占位不是可用内容：B 站 AI 字幕对纯音乐/无语音段会这么标，
+ * 拿它切段模型只能胡编，最后报「模型输出格式不对」。
+ */
+const MUSIC_PLACEHOLDER_RE =
+  /^(音乐|music|bgm|applause|掌声|笑声|silence|backgroundmusic|音乐声)$/i;
+
+export function hasMeaningfulCueText(text: string): boolean {
+  const cleaned = text
+    .replace(/[♪♫♬♩🎵🎶]/gu, ' ')
+    .replace(/[\[【(（][^\]】)）]*[\]】)）]/g, ' ')
+    .trim();
+  if (cleaned === '') return false;
+  if (!/[\p{L}\p{N}]/u.test(cleaned)) return false;
+  return !MUSIC_PLACEHOLDER_RE.test(cleaned.replace(/\s+/g, ''));
+}
+
 /** 00:01.2，用于面板里快速核对时间轴。 */
 export function formatCueTime(seconds: number): string {
   const totalTenths = Math.round(Math.max(0, seconds) * 10);

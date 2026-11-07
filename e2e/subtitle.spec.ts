@@ -97,3 +97,44 @@ test('pickTrack 认 ai-zh 这类自动生成的中文轨，但不会拿日语轨
   expect(pickTrack([track('ja')])).toBeNull();
   expect(pickTrack([track('ja')], true)?.lan).toBe('ja');
 });
+
+/**
+ * B 站 AI 字幕对纯音乐/无语音段会写「♪ 音乐 ♪」（BV1ECQ9B5EKe 的 P6 整段 19 行都是），
+ * 这种 cue 不能拿去切段：模型面对 19 行音乐标记只能胡编，最后报「模型输出格式不对」。
+ */
+test('音乐/环境声占位不算可用字幕内容', async () => {
+  const { hasMeaningfulCueText } = await import('../src/shared/subtitles');
+  expect(hasMeaningfulCueText('♪ 音乐 ♪')).toBe(false);
+  expect(hasMeaningfulCueText('♪♪♪')).toBe(false);
+  expect(hasMeaningfulCueText('[Music]')).toBe(false);
+  expect(hasMeaningfulCueText('[掌声]')).toBe(false);
+  expect(hasMeaningfulCueText('...')).toBe(false);
+  expect(hasMeaningfulCueText('All LLMs do is predict the next word.')).toBe(true);
+  expect(hasMeaningfulCueText('♪ 音乐 ♪ 大家好')).toBe(true);
+});
+
+/**
+ * 字幕行很少时（BV1ECQ9B5EKe P6 的自动转写只有 3 句），模型会把一段写成一行：
+ * `{"start_line": 0, "end_line": 0, "title": "..."}`。
+ * 这种输出在语义上是合法的，不能因为「行号不递增」「段数没到 6」就整条判失败。
+ */
+test('少数字幕行也接受一行一段，并按可用行数放宽段数下限', async () => {
+  const { parseOutline, segmentRange } = await import('../src/shared/outline');
+  const lines = [
+    { from: 0, to: 40, text: '大语言模型只是在预测下一个词' },
+    { from: 40, to: 200, text: '自回归生成与训练原理' },
+    { from: 200, to: 581, text: '幻觉成因与上下文窗口' },
+  ];
+  const range = segmentRange(581);
+  const text = JSON.stringify([
+    { start_line: 0, end_line: 0, title: '大语言模型预测下一个词' },
+    { start_line: 1, end_line: 1, title: '自回归生成与训练原理' },
+    { start_line: 2, end_line: 2, title: '幻觉成因与上下文窗口' },
+  ]);
+  const segments = parseOutline(text, 581, range, lines);
+  expect(segments).not.toBeNull();
+  expect(segments?.length).toBe(3);
+  expect(segments?.[0].start).toBe(0);
+  // 最后一段要覆盖到片尾（原来的「大纲必须覆盖全片」约束不变）。
+  expect(segments?.[segments.length - 1].end).toBe(581);
+});

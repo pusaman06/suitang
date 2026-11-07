@@ -6,7 +6,7 @@ import type {
   VideoInfo,
   VideoMeta,
 } from '../shared/types';
-import { normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
+import { hasMeaningfulCueText, normalizeSubtitleUrl, parseSubtitleBody, pickTrack, subtitleUrlMatchesCid } from '../shared/subtitles';
 import { loadSettings, type Settings } from '../shared/settings';
 import { buildQaPrompt, isGlobalQuestion } from '../shared/prompt';
 import {
@@ -1200,6 +1200,31 @@ async function generateOutline(
         } else {
           captionDetail = '没有可用字幕';
         }
+      }
+    }
+
+    // 官方字幕/转写里可能只有「♪ 音乐 ♪」这类占位（B 站 AI 字幕对纯音乐段会这么标，
+    // 比如 BV1ECQ9B5EKe 的 P6 整段只有 19 行音乐）。拿它切段，模型只能胡编，
+    // 最后报「模型输出格式不对」；当成没有可用字幕，交给转写/画面兜底更诚实。
+    if (cues.length > 0) {
+      const meaningful = cues.filter(cue => hasMeaningfulCueText(cue.content));
+      if (meaningful.length === 0) {
+        if (mode === 'subtitle') {
+          throw new OutlineFailure(
+            'no-subtitle',
+            '这个分 P 的字幕只有音乐/环境声，没有可用文字；可以试试语音转写或按画面生成',
+          );
+        }
+        if (mode === 'asr') {
+          throw new OutlineFailure(
+            'no-subtitle',
+            '这个分 P 的转写结果只有音乐/环境声，没有可用文字；可以试试按画面生成',
+          );
+        }
+        cues = [];
+        captionDetail = '没有可用字幕（只有音乐/环境声）';
+      } else {
+        cues = meaningful;
       }
     }
 
