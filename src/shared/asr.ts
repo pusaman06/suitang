@@ -77,7 +77,30 @@ function cleanAsrText(text: string): string {
 }
 
 /**
- * 按中文标点切句，并在 [start, end] 内按字符数加权分配时间。
+ * 英文 ASR 有时整段没有句末标点（SenseVoice 对英文课常见），只切成一句会让大纲
+ * 退化成 1–2 段；按逗号/分号再切，仍切不动就在 ~80 字符处按空格硬切。
+ */
+function splitLongSentence(sentence: string): string[] {
+  const byPause = sentence
+    .split(/(?<=[,;:])\s+/u)
+    .map(item => item.trim())
+    .filter(item => item !== '' && !PUNCT_ONLY_RE.test(item));
+  if (byPause.length > 1) return byPause;
+
+  const chunks: string[] = [];
+  let rest = sentence.trim();
+  while (rest.length > 80) {
+    let cut = rest.lastIndexOf(' ', 80);
+    if (cut < 40) cut = 80;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest !== '') chunks.push(rest);
+  return chunks.filter(item => item !== '' && !PUNCT_ONLY_RE.test(item));
+}
+
+/**
+ * 按中英文标点切句，并在 [start, end] 内按字符数加权分配时间。
  * SiliconFlow 只返回整段文本，没有时间戳；片内均分对大纲足够用。
  */
 export function splitIntoSentences(text: string, start: number, end: number): AsrSegment[] {
@@ -88,10 +111,15 @@ export function splitIntoSentences(text: string, start: number, end: number): As
   const safeEnd = Number.isFinite(end) ? Math.max(safeStart + 0.1, end) : safeStart + 0.1;
   const span = safeEnd - safeStart;
 
-  const sentences = source
-    .split(/[。！？；!?;\n]+/u)
+  let sentences = source
+    .split(/[。！？；\n]+|(?<=[.!?])\s+/u)
     .map(sentence => sentence.trim())
     .filter(sentence => sentence !== '' && !PUNCT_ONLY_RE.test(sentence));
+  // SenseVoice 对英文课常只返回逗号分隔的大段文本（一句 500+ 字符、横跨几十秒），
+  // 不细分的话 9 分钟课程只切出十几句，大纲只能切出 2 段。长句继续按逗号/空格拆。
+  sentences = sentences.flatMap(sentence =>
+    sentence.length > 120 ? splitLongSentence(sentence) : [sentence],
+  );
   if (sentences.length === 0) return [];
 
   const weights = sentences.map(sentence => Math.max(1, sentence.length));

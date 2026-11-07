@@ -92,19 +92,22 @@ async function readPageAudio(
         const pageNo = urlP || Number(state?.p) || 1;
         const current = pages.find(item => item.page === pageNo) ?? pages[pageNo - 1];
         const currentCid = Number(current?.cid) || 0;
-        // 播放器可能还在旧 P：__playinfo__ 的时长和请求的分 P 对不上就先等它切完。
+        // SPA 内切分 P 时 __playinfo__ 不会重新加载（仍是首屏分 P 的时长和音轨），
+        // 页面音轨不能拿来转写；但这不是「分 P 不一致」，改走后台 playurl 接口。
         const playLength = Number(root.__playinfo__?.data?.timelength) || 0;
         const playMismatch =
           pageDuration > 0 &&
           playLength > 0 &&
           Math.abs(playLength / 1000 - pageDuration) > 5;
         const stale =
-          playMismatch ||
           (typeof video?.bvid === 'string' && video.bvid !== pageBvid) ||
           (Number.isFinite(Number(video?.aid)) && Number(video?.aid) !== pageAid) ||
           (currentCid > 0 && currentCid !== pageCid);
         if (stale) {
           return { ok: false, stale: true, error: '播放地址和当前分 P 不一致，请稍后重试' };
+        }
+        if (playMismatch) {
+          return { ok: false, error: '播放器还在旧分 P，改从接口取音轨' };
         }
 
         const items = root.__playinfo__?.data?.dash?.audio ?? [];

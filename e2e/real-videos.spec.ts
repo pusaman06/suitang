@@ -227,12 +227,12 @@ test('多 P BV1sHU9BmEne 在 P2 转写不再误报分 P 不一致', async () => 
 });
 
 /**
- * 待办 3e：BV1ECQ9B5EKe 的 P6（B 站 AI 字幕整段只有 19 行「♪ 音乐 ♪」）。
- * 旧行为：拿音乐标记去切段，模型只能胡编，最后报「模型输出格式不对」。
- * 新行为：识别出「没有可用文字」→ 当作没字幕，自动转写后重试；转写也没人声就如实提示。
+ * 待办 3f：在页面内切分 P（不刷新）后转写。
+ * 实证：SPA 切 P 后 __playinfo__.data.timelength 仍是首屏 P1 的 890s（不更新），
+ * 旧逻辑把它当「播放器还在旧 P」误报「分 P 不一致」；现在改走后台 playurl 接口。
  */
-test('字幕只有音乐标记的分 P 不报格式错', async () => {
-  test.setTimeout(600_000);
+test('SPA 内切分 P 后转写不再误报分 P 不一致', async () => {
+  test.setTimeout(300_000);
   const sfKey = process.env.SILICONFLOW_KEY ?? '';
   const dsKey = process.env.DS_KEY ?? '';
   test.skip(sfKey === '' || dsKey === '', '需要 .env 里的 SILICONFLOW_KEY 和 DS_KEY');
@@ -255,12 +255,94 @@ test('字幕只有音乐标记的分 P 不报格式错', async () => {
     });
 
     const page = await context.newPage();
-    for (const worker of context.serviceWorkers()) {
-      worker.on('console', msg => console.log('[SW] ' + msg.text()));
-    }
-    context.on('serviceworker', worker => {
-      worker.on('console', msg => console.log('[SW] ' + msg.text()));
+    await page.goto('https://www.bilibili.com/video/BV1sHU9BmEne/?p=1', {
+      waitUntil: 'domcontentloaded',
     });
+    await expect(page.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+    await page.locator('.vt-ball').click();
+    await expect(page.locator('.vt-panel')).toBeVisible();
+    await expect(page.locator('.vt-part')).toContainText('P1', { timeout: 30_000 });
+
+    // 真实用户切 P 的方式：点分 P 列表，只改 URL 不刷新页面。
+    // 分 P 项里没有 <a>（整个 div 走事件委托），且列表顶部会被固定导航栏挡住，
+    // 所以用 DOM click 触发同一条 SPA 路由。
+    await expect(page.locator('.video-pod__item').nth(1)).toBeVisible({ timeout: 30_000 });
+    await page.evaluate(() => {
+      const items = [...document.querySelectorAll('.video-pod__item')];
+      const target = (items[1].querySelector('a') ?? items[1]) as HTMLElement;
+      target.click();
+    });
+    await expect(page).toHaveURL(/[?&]p=2/, { timeout: 30_000 });
+    await expect(page.locator('.vt-part')).toContainText('P2', { timeout: 30_000 });
+    await page.waitForTimeout(1500);
+    console.log(
+      '===SPA-BEFORE-CLICK=== part=' +
+        JSON.stringify(await page.locator('.vt-part').innerText().catch(() => '?')) +
+        ' asrVisible=' +
+        (await page.locator('.vt-outline-asr').isVisible().catch(() => false)) +
+        ' asrText=' +
+        JSON.stringify(await page.locator('.vt-outline-asr').innerText().catch(() => '?')),
+    );
+    const playLength = await page.evaluate(
+      () =>
+        (
+          window as unknown as { __playinfo__?: { data?: { timelength?: number } } }
+        ).__playinfo__?.data?.timelength ?? 0,
+    );
+    console.log(`===SPA-URL=== ${page.url()} playinfo=${playLength}`);
+    console.log('===SPA-IDS=== ' + (await page.locator('.vt-ids').innerText().catch(() => '?')));
+
+    const t0 = Date.now();
+    await page.locator('.vt-outline-asr').click();
+    await expect(page.locator('.vt-outline-asr')).toHaveText('已转写', { timeout: 180_000 });
+    console.log(`===SPA-ASR=== ${Date.now() - t0}ms`);
+    const errorText = await page.locator('.vt-outline-error-text').innerText().catch(() => '');
+    const emptyText = await page.locator('.vt-outline-empty-text').innerText().catch(() => '');
+    console.log(`===SPA-TEXT=== 错误=${JSON.stringify(errorText)} 空态=${JSON.stringify(emptyText)}`);
+    await page.screenshot({ path: join(SHOT_DIR, 'd10-spa-switch-p2.png') });
+    expect(errorText).not.toContain('分 P 不一致');
+    expect(emptyText).not.toContain('分 P 不一致');
+  } finally {
+    await clearStorage(context, extensionId).catch(() => undefined);
+    await context.close();
+  }
+});
+
+/**
+ * 待办 3e：BV1ECQ9B5EKe 的 P6（B 站 AI 字幕整段只有 19 行「♪ 音乐 ♪」）。
+ * 旧行为：拿音乐标记去切段，模型只能胡编，最后报「模型输出格式不对」。
+ * 新行为：识别出「没有可用文字」→ 当作没字幕，自动转写后重试；转写也没人声就如实提示。
+ */
+test('字幕只有音乐标记的分 P 不报格式错', async () => {
+  test.setTimeout(600_000);
+  const sfKey = process.env.SILICONFLOW_KEY ?? '';
+  const dsKey = process.env.DS_KEY ?? '';
+  test.skip(sfKey === '' || dsKey === '', '需要 .env 里的 SILICONFLOW_KEY 和 DS_KEY');
+
+  const context = await launchWithExtension();
+  const extensionId = await getExtensionId(context);
+  for (const worker of context.serviceWorkers()) {
+    worker.on('console', msg => console.log('[SW] ' + msg.text()));
+  }
+  context.on('serviceworker', worker => {
+    worker.on('console', msg => console.log('[SW] ' + msg.text()));
+  });
+  try {
+    expect(await hasLoginCookie(context)).toBe(true);
+    await clearStorage(context, extensionId);
+    await writeSettings(context, extensionId, {
+      apiKey: dsKey,
+      apiBaseUrl: 'https://api.deepseek.com',
+      textModel: 'deepseek-flash',
+      visionModel: 'deepseek-flash',
+      thinking: false,
+      frameEnabled: false,
+      asrApiKey: sfKey,
+      asrBaseUrl: 'https://api.siliconflow.cn/v1',
+      asrModel: 'FunAudioLLM/SenseVoiceSmall',
+    });
+
+    const page = await context.newPage();
     await page.goto('https://www.bilibili.com/video/BV1ECQ9B5EKe/?p=6', {
       waitUntil: 'domcontentloaded',
     });
@@ -290,6 +372,29 @@ test('字幕只有音乐标记的分 P 不报格式错', async () => {
     console.log(`===MUSIC-ERROR=== ${JSON.stringify(errorText)}`);
     const itemCount = await page.locator('.vt-outline-item').count();
     console.log(`===MUSIC-ITEMS=== ${itemCount}`);
+    console.log('===MUSIC-DIAG=== ' + (await page.locator('.vt-outline-diag').innerText().catch(() => '?')));
+    console.log(
+      '===MUSIC-ITEMS-TEXT=== ' +
+        JSON.stringify((await page.locator('.vt-outline-item').allInnerTexts().catch(() => [])).slice(0, 4)),
+    );
+    const diagPage = await context.newPage();
+    try {
+      await diagPage.goto(`chrome-extension://${extensionId}/src/options/index.html`);
+      await diagPage.waitForTimeout(500);
+      const stored = (await diagPage.evaluate(() => chrome.storage.local.get(null))) as Record<string, unknown>;
+      for (const key of Object.keys(stored)) {
+        if (!key.startsWith('asr:') && !key.startsWith('outline:')) continue;
+        const value = stored[key] as { segments?: { content?: string; title?: string }[] } | undefined;
+        const list = Array.isArray(value?.segments) ? value.segments : [];
+        console.log(
+          `===MUSIC-CACHE=== ${key} segments=${list.length} first=${JSON.stringify(
+            (list[0]?.content ?? list[0]?.title ?? '').slice(0, 40),
+          )}`,
+        );
+      }
+    } finally {
+      await diagPage.close();
+    }
     await page.screenshot({ path: join(SHOT_DIR, 'd10-music-subtitle.png') });
 
     // 关键：不能再拿音乐标记去硬切、报「模型输出格式不对」。

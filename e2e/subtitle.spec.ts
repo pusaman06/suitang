@@ -138,3 +138,29 @@ test('少数字幕行也接受一行一段，并按可用行数放宽段数下�
   // 最后一段要覆盖到片尾（原来的「大纲必须覆盖全片」约束不变）。
   expect(segments?.[segments.length - 1].end).toBe(581);
 });
+
+/**
+ * 英文讲课视频（吴恩达 RAG 课这类）ASR 出来的是英文：旧的切句正则只认中文标点，
+ * 整段英文切不开，大纲会退化成 1–2 段。英文句末标点后跟空格也要能切；
+ * 整段连标点都没有时按逗号/长度兜底。
+ */
+test('英文转写按英文句末标点切句，无标点长文本按逗号兜底', async () => {
+  const { splitIntoSentences } = await import('../src/shared/asr');
+  const english = splitIntoSentences(
+    'LLMs are just fancy autocomplete. They predict the next token, not facts. Is that useless? No!',
+    0,
+    60,
+  );
+  expect(english.length).toBe(4);
+  expect(english[0].text).toBe('LLMs are just fancy autocomplete.');
+  expect(english[0].start).toBe(0);
+  expect(english[english.length - 1].end).toBe(60);
+
+  const long =
+    'this is a long english sentence without any ending punctuation and it keeps going, ' +
+    'with a comma in the middle, and more words after that to make it long enough';
+  const fallback = splitIntoSentences(long, 0, 300);
+  expect(fallback.length).toBeGreaterThan(2);
+  expect(fallback[0].start).toBe(0);
+  expect(fallback[fallback.length - 1].end).toBe(300);
+});
