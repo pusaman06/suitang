@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Video Tutor",
+  "name": "随堂",
   "version": "0.1.0",
   "description": "在 B 站看课时暂停提问：字幕 + 画面 + 时间戳。",
   "permissions": [
@@ -20,12 +20,12 @@
       "run_at": "document_idle"
     }
   ],
-  "action": { "default_title": "Video Tutor" },
+  "action": { "default_title": "随堂" },
   "options_page": "src/options/index.html",
   "commands": {
     "ask": {
       "suggested_key": { "default": "Alt+Q" },
-      "description": "打开/收起 Video Tutor 面板"
+      "description": "打开/收起随堂面板"
     }
   }
 }

@@ -1,4 +1,4 @@
-# video-tutor
+# 随堂（Suitang）
 
 B 站看课助手（MV3 扩展 + 本地 companion）。说明见 [README.md](README.md)，路线图见 [docs/roadmap.md](docs/roadmap.md)。
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Video Tutor 本地 companion。
+ * 随堂 本地 companion。
  *
  * 零依赖，只监听 127.0.0.1。扩展把课程/分 P 数据 PUT 过来，这里落成
  * data/videos/<bvid>/course.json + course.md / p<N>.json + p<N>.md。

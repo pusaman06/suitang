@@ -41,10 +41,10 @@ export function mountUi(info: VideoInfo): UiHandle {
   const shadow = host.attachShadow({ mode: 'open' });
   applyStyles(shadow, styleText);
   shadow.innerHTML = `
-    <button class="vt-ball" title="Video Tutor（Alt+Q）">问</button>
+    <button class="vt-ball" title="随堂（Alt+Q）">问</button>
     <section class="vt-panel" hidden>
       <div class="vt-head">
-        <span class="vt-title">Video Tutor</span>
+        <span class="vt-title">随堂</span>
         <span class="vt-head-actions">
           <button class="vt-gear" type="button" title="设置">⚙</button>
           <button class="vt-close" type="button" title="关闭">×</button>
