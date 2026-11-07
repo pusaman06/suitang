@@ -54,35 +54,55 @@ async function readPageAudio(
   aid: number,
   cid: number,
   bvid: string,
+  duration = 0,
 ): Promise<PageAudioResult | null> {
   try {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      args: [aid, cid, bvid],
-      func: (pageAid: number, pageCid: number, pageBvid: string): PageAudioResult => {
+      args: [aid, cid, bvid, duration],
+      func: (
+        pageAid: number,
+        pageCid: number,
+        pageBvid: string,
+        pageDuration: number,
+      ): PageAudioResult => {
         const root = window as unknown as {
           __INITIAL_STATE__?: {
+            p?: number;
             videoData?: {
               bvid?: string;
               aid?: number;
-              cid?: number;
-              pages?: Array<{ cid?: number }>;
+              pages?: Array<{ page?: number; cid?: number }>;
             };
           };
           __playinfo__?: {
             data?: {
+              timelength?: number;
               dash?: { audio?: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }> };
             };
           };
         };
-        const state = root.__INITIAL_STATE__?.videoData;
-        const pageCidFromState =
-          Number(state?.cid) || state?.pages?.find(item => item.cid === pageCid)?.cid;
+        const state = root.__INITIAL_STATE__;
+        const video = state?.videoData;
+        const pages = video?.pages ?? [];
+        // 当前分 P 以 URL 的 ?p= 为准：SPA 切 P 只改 URL，__INITIAL_STATE__
+        // 不更新（videoData.cid 永远是首 P 的 cid），拿它判断会误报「分 P 不一致」。
+        const urlP = Number(new URL(location.href).searchParams.get('p') ?? '1') || 1;
+        const pageNo = urlP || Number(state?.p) || 1;
+        const current = pages.find(item => item.page === pageNo) ?? pages[pageNo - 1];
+        const currentCid = Number(current?.cid) || 0;
+        // 播放器可能还在旧 P：__playinfo__ 的时长和请求的分 P 对不上就先等它切完。
+        const playLength = Number(root.__playinfo__?.data?.timelength) || 0;
+        const playMismatch =
+          pageDuration > 0 &&
+          playLength > 0 &&
+          Math.abs(playLength / 1000 - pageDuration) > 5;
         const stale =
-          (typeof state?.bvid === 'string' && state.bvid !== pageBvid) ||
-          (Number.isFinite(Number(state?.aid)) && Number(state?.aid) !== pageAid) ||
-          (Number.isFinite(Number(pageCidFromState)) && Number(pageCidFromState) !== pageCid);
+          playMismatch ||
+          (typeof video?.bvid === 'string' && video.bvid !== pageBvid) ||
+          (Number.isFinite(Number(video?.aid)) && Number(video?.aid) !== pageAid) ||
+          (currentCid > 0 && currentCid !== pageCid);
         if (stale) {
           return { ok: false, stale: true, error: '播放地址和当前分 P 不一致，请稍后重试' };
         }
@@ -156,8 +176,9 @@ export async function getAudioTrack(
   aid: number,
   cid: number,
   bvid: string,
+  duration = 0,
 ): Promise<AudioTrack> {
-  const page = await readPageAudio(tabId, aid, cid, bvid);
+  const page = await readPageAudio(tabId, aid, cid, bvid, duration);
   if (page?.stale) {
     throw new AsrFailure('stale', page.error ?? '播放地址和当前分 P 不一致，请稍后重试');
   }

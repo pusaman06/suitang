@@ -582,7 +582,7 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
   const cached = await readAsrResult(request.bvid, request.p, cid);
   if (cached) return cached;
 
-  const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid);
+  const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid, duration);
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 0, total: 1 });
   let buffer: ArrayBuffer;
   try {

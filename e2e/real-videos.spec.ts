@@ -168,6 +168,64 @@ test('长视频 BV1aRxX6iE7h（52:08）转写入库并量 md 大小', async () =
   }
 });
 
+/**
+ * 待办 3d：多 P 视频（185P Python 课，P2 455 秒）在 P2 直接转写。
+ * B 站 SPA 切 P 后 __INITIAL_STATE__.videoData.cid 仍是首 P 的 cid，旧逻辑拿它
+ * 判断当前分 P，p>1 一律误报「播放地址和当前分 P 不一致」；修好后应能直接转写。
+ */
+test('多 P BV1sHU9BmEne 在 P2 转写不再误报分 P 不一致', async () => {
+  test.setTimeout(600_000);
+  const sfKey = process.env.SILICONFLOW_KEY ?? '';
+  const dsKey = process.env.DS_KEY ?? '';
+  test.skip(sfKey === '' || dsKey === '', '需要 .env 里的 SILICONFLOW_KEY 和 DS_KEY');
+
+  const context = await launchWithExtension();
+  const extensionId = await getExtensionId(context);
+  try {
+    expect(await hasLoginCookie(context)).toBe(true);
+    await clearStorage(context, extensionId);
+    await writeSettings(context, extensionId, {
+      apiKey: dsKey,
+      apiBaseUrl: 'https://api.deepseek.com',
+      textModel: 'deepseek-flash',
+      visionModel: 'deepseek-flash',
+      thinking: false,
+      frameEnabled: false,
+      asrApiKey: sfKey,
+      asrBaseUrl: 'https://api.siliconflow.cn/v1',
+      asrModel: 'FunAudioLLM/SenseVoiceSmall',
+    });
+
+    const page = await context.newPage();
+    await page.goto('https://www.bilibili.com/video/BV1sHU9BmEne/?p=2', {
+      waitUntil: 'domcontentloaded',
+    });
+    await expect(page.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+    await page.locator('.vt-ball').click();
+    await expect(page.locator('.vt-panel')).toBeVisible();
+    await expect(page.locator('.vt-part')).toContainText('P2', { timeout: 30_000 });
+    await page.waitForTimeout(3000);
+    console.log('===MULTIP-IDS=== ' + (await page.locator('.vt-ids').innerText().catch(() => '?')));
+
+    // 手动点「转写这段」，强制走 ASR（P2 是否有官方字幕都覆盖不到这条路径）。
+    const t0 = Date.now();
+    await page.locator('.vt-outline-asr').click();
+    await expect(page.locator('.vt-outline-asr')).toHaveText('已转写', { timeout: 300_000 });
+    console.log(`===MULTIP-ASR=== ${Date.now() - t0}ms`);
+
+    // 旧逻辑在这里会直接抛「分 P 不一致」，所以「已转写」本身就证明修复生效。
+    const errorText = await page.locator('.vt-outline-error-text').innerText().catch(() => '');
+    const emptyText = await page.locator('.vt-outline-empty-text').innerText().catch(() => '');
+    console.log(`===MULTIP-TEXT=== 错误=${JSON.stringify(errorText)} 空态=${JSON.stringify(emptyText)}`);
+    await page.screenshot({ path: join(SHOT_DIR, 'd10-multip-real-p2.png') });
+    expect(errorText).not.toContain('分 P 不一致');
+    expect(emptyText).not.toContain('分 P 不一致');
+  } finally {
+    await clearStorage(context, extensionId).catch(() => undefined);
+    await context.close();
+  }
+});
+
 async function fetchCompanionStatus(): Promise<{ kbDir?: string } | null> {
   try {
     const response = await fetch('http://127.0.0.1:8787/api/kb/status');
