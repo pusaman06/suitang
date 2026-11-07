@@ -578,13 +578,35 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
 
   const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid, duration);
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 0, total: 1 });
-  let buffer: ArrayBuffer;
-  try {
-    buffer = await downloadAudioViaOffscreen(track.url);
-  } catch (error) {
-    // 离屏文档起不来时退回后台直连，短音频够用。
-    log('offscreen audio download failed, falling back', error);
-    buffer = await downloadAudio(track.url);
+  // 一条音轨地址不通就换下一条（通常先试标准 CDN 备用域名）：
+  // B 站会把一部分音轨放到 P2P CDN 上，扩展偶尔连不上，不能一次失败就放弃。
+  const candidates = [track.url, ...(track.alternates ?? [])].slice(0, 6);
+  let buffer: ArrayBuffer | undefined;
+  let lastError: unknown;
+  for (const url of candidates) {
+    try {
+      buffer = await downloadAudioViaOffscreen(url);
+      break;
+    } catch (error) {
+      // 离屏文档起不来时退回后台直连，短音频够用。
+      log('offscreen audio download failed, falling back', error);
+      lastError = error;
+    }
+    try {
+      buffer = await downloadAudio(url);
+      break;
+    } catch (error) {
+      log('background audio download failed, trying next candidate', error);
+      lastError = error;
+    }
+  }
+  if (!buffer) {
+    throw new AsrFailure(
+      'download',
+      `下载音轨失败：网络请求失败，请重试（${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }）`,
+    );
   }
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 1, total: 1 });
 

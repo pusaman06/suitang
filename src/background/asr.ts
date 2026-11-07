@@ -19,11 +19,13 @@ export class AsrFailure extends Error {
 export interface AudioTrack {
   url: string;
   bandwidth: number;
+  /** 同一分 P 的备用音轨地址（CDN 备用域名），主地址下载失败时按顺序尝试。 */
+  alternates?: string[];
 }
 
 interface PageAudioResult {
   ok: boolean;
-  audios?: Array<{ url: string; bandwidth: number }>;
+  audios?: AudioTrack[];
   stale?: boolean;
   error?: string;
 }
@@ -31,20 +33,39 @@ interface PageAudioResult {
 interface AudioItem {
   baseUrl?: string;
   base_url?: string;
+  backupUrl?: string[];
   bandwidth?: number;
 }
 
-function pickAudio(items: AudioItem[] | undefined): AudioTrack | null {
+/**
+ * B 站会把一部分音轨放到 P2P CDN（mcdn.bilivideo.cn / *.mountaintoys.cn）上，
+ * 这些地址只对页面播放器友好：扩展的 fetch 连上去经常直接 Failed to fetch。
+ * 候选顺序 = 标准 CDN 优先、P2P 最后，同一优先级里按码率升序。
+ */
+const P2P_AUDIO_HOST_RE = /(?:mcdn\.bilivideo\.cn|mountaintoys\.cn)/i;
+
+function audioRank(url: string): number {
+  return P2P_AUDIO_HOST_RE.test(url) ? 1 : 0;
+}
+
+function audioCandidates(items: AudioItem[] | undefined): AudioTrack[] {
   // 转写只要语音听得清，取码率最低的音轨：上传快、超时风险小。
   // 52 分钟的视频，最高码率约 41MB，最低码率约 26MB（SiliconFlow 上限 50MB）。
-  const audios = (items ?? [])
-    .map(item => ({
-      url: item.baseUrl ?? item.base_url ?? '',
-      bandwidth: Number(item.bandwidth) || 0,
-    }))
-    .filter(item => item.url !== '')
-    .sort((a, b) => a.bandwidth - b.bandwidth);
-  return audios[0] ?? null;
+  const rows: AudioTrack[] = [];
+  for (const item of items ?? []) {
+    const urls = [item.baseUrl ?? item.base_url ?? '', ...(item.backupUrl ?? [])];
+    for (const url of urls) {
+      if (!/^https?:\/\//i.test(url)) continue;
+      rows.push({ url, bandwidth: Number(item.bandwidth) || 0 });
+    }
+  }
+  return rows.sort(
+    (a, b) => audioRank(a.url) - audioRank(b.url) || a.bandwidth - b.bandwidth,
+  );
+}
+
+function pickAudio(items: AudioItem[] | undefined): AudioTrack | null {
+  return audioCandidates(items)[0] ?? null;
 }
 
 /** 页面首屏/SPA 切 P 后注入的 __playinfo__ 通常已有音轨，优先用它，避免 playurl 的 CORS。 */
@@ -78,21 +99,41 @@ async function readPageAudio(
           __playinfo__?: {
             data?: {
               timelength?: number;
-              dash?: { audio?: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }> };
+              dash?: {
+                audio?: Array<{
+                  baseUrl?: string;
+                  base_url?: string;
+                  backupUrl?: string[];
+                  bandwidth?: number;
+                }>;
+              };
             };
           };
         };
-        // 同 pickAudio：优先最低码率，ASR 不需要高音质，上传也更快。
+        // 同 audioCandidates：标准 CDN 优先、P2P 最后，再按码率升序。
+        const p2pHost = /(?:mcdn\.bilivideo\.cn|mountaintoys\.cn)/i;
         const readAudios = (
-          items: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }>,
-        ): Array<{ url: string; bandwidth: number }> =>
-          items
-            .map(item => ({
-              url: item.baseUrl ?? item.base_url ?? '',
-              bandwidth: Number(item.bandwidth) || 0,
-            }))
-            .filter(item => item.url !== '')
-            .sort((a, b) => a.bandwidth - b.bandwidth);
+          items: Array<{
+            baseUrl?: string;
+            base_url?: string;
+            backupUrl?: string[];
+            bandwidth?: number;
+          }>,
+        ): Array<{ url: string; bandwidth: number }> => {
+          const rows: Array<{ url: string; bandwidth: number }> = [];
+          for (const item of items) {
+            const urls = [item.baseUrl ?? item.base_url ?? '', ...(item.backupUrl ?? [])];
+            for (const url of urls) {
+              if (!/^https?:\/\//i.test(url)) continue;
+              rows.push({ url, bandwidth: Number(item.bandwidth) || 0 });
+            }
+          }
+          return rows.sort(
+            (a, b) =>
+              (p2pHost.test(a.url) ? 1 : 0) - (p2pHost.test(b.url) ? 1 : 0) ||
+              a.bandwidth - b.bandwidth,
+          );
+        };
 
         const state = root.__INITIAL_STATE__;
         const video = state?.videoData;
@@ -131,7 +172,14 @@ async function readPageAudio(
               code?: number;
               message?: string;
               data?: {
-                dash?: { audio?: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }> };
+                dash?: {
+                  audio?: Array<{
+                    baseUrl?: string;
+                    base_url?: string;
+                    backupUrl?: string[];
+                    bandwidth?: number;
+                  }>;
+                };
               };
             };
             if (payload.code === 0) {
@@ -220,7 +268,8 @@ export async function getAudioTrack(
     throw new AsrFailure('stale', page.error ?? '播放地址和当前分 P 不一致，请稍后重试');
   }
   if (page?.audios?.length) {
-    return page.audios[0];
+    const [first, ...rest] = page.audios;
+    return { ...first, alternates: rest.map(item => item.url) };
   }
 
   const fallback = await fetchPlayUrl(aid, cid, bvid);
@@ -230,7 +279,8 @@ export async function getAudioTrack(
   if (!fallback.ok || !fallback.audios?.length) {
     throw new AsrFailure('no-audio', fallback.error ?? '没有找到可用的音轨');
   }
-  return fallback.audios[0];
+  const [firstTrack, ...restTracks] = fallback.audios;
+  return { ...firstTrack, alternates: restTracks.map(item => item.url) };
 }
 
 /**

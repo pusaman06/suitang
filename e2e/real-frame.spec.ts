@@ -43,6 +43,15 @@ test('真实 vision：暂停截图后模型能读出画面文字', async () => {
     await expect(page.locator('.vt-panel')).toBeVisible();
 
     // 12s 处画面是 ChatGPT logo + (2022.11.30)，正好考「读画面文字」。
+    // 先等视频能解码，再 seek：B 站网络慢时直接 seek 会截到加载占位页。
+    await page.waitForFunction(
+      () => {
+        const video = document.querySelector('video');
+        return !!video && video.readyState >= 2;
+      },
+      null,
+      { timeout: 30_000 },
+    );
     await page.evaluate(async () => {
       const video = document.querySelector('video');
       if (!video) return;
@@ -57,6 +66,8 @@ test('真实 vision：暂停截图后模型能读出画面文字', async () => {
         window.setTimeout(resolve, 2000);
       });
     });
+    // seeked 只代表定位完成，这一帧真正画出来还要一点时间。
+    await page.waitForTimeout(1000);
 
     const started = Date.now();
     await page.locator('.vt-input').fill('这页写的什么？用一句话回答，再给一个时间戳。');
