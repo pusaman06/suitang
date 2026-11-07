@@ -40,6 +40,7 @@ export interface OutlineRange {
 export type OutlineErrorCode =
   | 'no-key'
   | 'no-subtitle'
+  | 'no-speech'
   | 'network'
   | 'bad-output'
   | 'empty'

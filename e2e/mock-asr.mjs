@@ -5,7 +5,7 @@
 import http from 'node:http';
 
 export const DEFAULT_ASR_TEXT =
-  '第一段转写。第二句话在这里。第三句补充内容。第四句用来检查时间戳。';
+  '第一段转写讲的是开场目标和整体流程。第二句话在这里解释一句话生成图片的步骤。第三句补充手机操控和语音输入的具体做法。第四句用来检查时间戳分配是否均匀合理，以及最终的大纲分段效果。';
 
 export function createMockAsrServer() {
   /** @type {{ texts: string[], status: number, delayMs: number, audioDelayMs: number }} */

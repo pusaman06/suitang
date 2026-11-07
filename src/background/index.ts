@@ -75,6 +75,8 @@ import {
 import {
   ASR_SCHEMA,
   asrStorageKey,
+  countSpeechChars,
+  isSparseSpeech,
   mergeAsrSegments,
   splitIntoSentences,
   type AsrError,
@@ -633,6 +635,29 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
     throw new AsrFailure('empty', '这个视频没检测到人声，只识别到音乐或环境声');
   }
 
+  // 有字但几乎没有信息量（宣传片背景声里的零碎人声，如「嘟嘟。Yeah.」）：
+  // 这不是可用的字幕，拿它切段只会产出「鲸鱼口述」这类噪声大纲。先把结果存进
+  // 缓存（用户再点转写就不再花钱），再如实说没口播，引导走「按画面生成」。
+  const transcript = segments.map(segment => segment.text).join(' ');
+  if (isSparseSpeech(transcript, duration)) {
+    await chrome.storage.local.set({
+      [asrStorageKey(request.bvid, request.p, cid)]: {
+        schema: ASR_SCHEMA,
+        bvid: request.bvid,
+        p: request.p,
+        cid,
+        duration,
+        segments,
+        model: settings.asrModel,
+        createdAt: Date.now(),
+      },
+    });
+    throw new AsrFailure(
+      'empty',
+      `只识别到 ${countSpeechChars(transcript)} 个字，这段视频几乎没有口播`,
+    );
+  }
+
   const result: AsrResult = {
     bvid: request.bvid,
     p: request.p,
@@ -1048,6 +1073,17 @@ async function generateOutline(
     } else {
       const asr = await readAsrResult(request.bvid, request.p, request.cid);
       if (asr) {
+        const asrText = asrCues(asr)
+          .map(cue => cue.content)
+          .join(' ');
+        // 转写缓存信息量太低（1 分 40 秒宣传片只有十几个字）：别拿它硬切段，
+        // 否则只会产出「鲸鱼口述」这类噪声大纲。直接引导用户走「按画面生成」。
+        if (isSparseSpeech(asrText, request.duration)) {
+          throw new OutlineFailure(
+            'no-speech',
+            `只识别到 ${countSpeechChars(asrText)} 个字，这段视频几乎没有口播`,
+          );
+        }
         cues = asrCues(asr);
         captions = 'asr';
         captionDetail = '语音转写 ASR（时间戳按字数估算）';

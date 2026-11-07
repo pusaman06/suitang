@@ -758,7 +758,7 @@ export function mountUi(info: VideoInfo): UiHandle {
         }
         // 没有中文字幕：**不自动抓帧**。抓帧要来回 seek 视频、还慢，
         // 得让用户自己选走哪条路（转写 / 按画面）。
-        if (!response.ok && response.code === 'no-subtitle') {
+        if (!response.ok && (response.code === 'no-subtitle' || response.code === 'no-speech')) {
           outlineGenerating = false;
           outlineCapturing = false;
           outlineEmpty.hidden = false;
@@ -774,6 +774,14 @@ export function mountUi(info: VideoInfo): UiHandle {
           // 「试字幕」只走官方字幕通道：失败就如实说，不再自动转写（避免又花一次钱）。
           if (options.subtitlesOnly) {
             outlineEmptyText.textContent = `${head}。官方字幕暂时拿不到，可以先「按画面生成」用截图凑一份大纲。`;
+            outlineFrames.hidden = false;
+            return;
+          }
+
+          // 转写结果信息量太低（纯画面宣传片只转出十几个字）：不拿它硬切大纲，
+          // 引导去「按画面生成」——否则只会产出「鲸鱼口述」这种噪声分段。
+          if (response.code === 'no-speech') {
+            outlineEmptyText.textContent = `${head}。建议点「按画面生成」用截图凑一份大纲。`;
             outlineFrames.hidden = false;
             return;
           }
@@ -934,7 +942,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     if (code === 'empty') {
       outlineError.hidden = true;
       outlineEmpty.hidden = false;
-      outlineEmptyText.textContent = `转写失败：${message}。可以直接点「按画面生成」用截图凑一份大纲。`;
+      outlineEmptyText.textContent = `转写结果：${message}。可以直接点「按画面生成」用截图凑一份大纲。`;
       outlineFrames.hidden = false;
       renderOutline();
       return;

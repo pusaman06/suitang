@@ -214,3 +214,73 @@ test('无字幕视频：转写整段音轨、缓存时间戳，再用 ASR 字幕
 
   await page.screenshot({ path: join(SHOT_DIR, 'd8-asr.png'), fullPage: false });
 });
+
+test('转写结果信息量太低：不拿它硬切大纲，提示按画面生成', async () => {
+  await clearStorage(context, extensionId);
+  await writeSettings(context, extensionId, {
+    apiKey: 'sk-e2e-asr',
+    apiBaseUrl: deepseekUrl,
+    textModel: 'deepseek-flash',
+    visionModel: 'deepseek-vision-e2e',
+    maxTokens: 2048,
+    thinking: false,
+    contextWindowSec: 90,
+    frameEnabled: false,
+    asrApiKey: 'sk-asr-e2e',
+    asrBaseUrl: `${asrRoot}/v1`,
+    asrModel: 'FunAudioLLM/SenseVoiceSmall',
+  });
+  // 1 分 40 秒的纯画面宣传片：转写只回十几个零碎字（真实案例 BV1i24P6rEmt）。
+  asr.state.texts = ['身最高分。嘟嘟。Yeah.'];
+
+  await page.goto(ASR_VIDEO_URL, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.vt-ball')).toBeVisible({ timeout: 30_000 });
+  await page.locator('.vt-ball').click();
+  await expect(page.locator('.vt-panel')).toBeVisible();
+
+  const meta = await readVideoMeta();
+  await page.route('**/x/player/v2**', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 0, data: { subtitle: { subtitles: [] }, view_points: [] } }),
+    }),
+  );
+  await page.route('**/x/player/playurl**', route => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          bvid: meta.bvid,
+          aid: meta.aid,
+          cid: meta.cid,
+          dash: { audio: [{ baseUrl: `${asrRoot}/audio.m4a`, bandwidth: 128_000 }] },
+        },
+      }),
+    });
+  });
+  await page.evaluate(url => {
+    (window as unknown as { __playinfo__?: unknown }).__playinfo__ = {
+      data: { dash: { audio: [{ baseUrl: url, bandwidth: 128_000 }] } },
+    };
+  }, `${asrRoot}/audio.m4a`);
+
+  await page.locator('.vt-outline-asr').click();
+  await expect(page.locator('.vt-outline-empty-text')).toContainText('几乎没有口播', {
+    timeout: 30_000,
+  });
+  await expect(page.locator('.vt-outline-empty-text')).toContainText('按画面生成');
+  await expect(page.locator('.vt-outline-item')).toHaveCount(0);
+  await expect(page.locator('.vt-outline-frames')).toBeVisible();
+
+  // 再点「生成大纲」：命中 ASR 缓存后同样不拿噪声文本切段，也不该再花一次模型调用。
+  const before = deepseek.requests.length;
+  await page.locator('.vt-outline-generate').click();
+  await expect(page.locator('.vt-outline-empty-text')).toContainText('几乎没有口播', {
+    timeout: 20_000,
+  });
+  expect(deepseek.requests.length).toBe(before);
+  await page.screenshot({ path: join(SHOT_DIR, 'd11-sparse-speech.png'), fullPage: false });
+});

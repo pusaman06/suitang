@@ -187,3 +187,25 @@ export function mergeAsrSegments(parts: AsrSegment[]): AsrSegment[] {
   }
   return merged;
 }
+
+/**
+ * 只数「真正有信息量」的字符：汉字、字母、数字。标点、空白、emoji（♪ 等）都不算，
+ * 纯音乐视频转写完剩下的就是这种零碎内容。
+ */
+export function countSpeechChars(text: string): number {
+  const matches = String(text ?? '').match(/[\p{Script=Han}\p{L}\p{N}]/gu);
+  return matches?.length ?? 0;
+}
+
+/**
+ * 「转写结果信息量太低」判定：短视频看总字数，长视频看字/秒。
+ * 依据：1 分 40 秒的纯音乐宣传片只转出 15 个字（「身最高分。嘟嘟。Yeah.」），
+ * 拿它切段只会产出「鲸鱼口述」这种噪声大纲；正常中文口播约 3–5 字/秒，
+ * 英文课 581 秒转出 8451 字符（约 14.5 字/秒），不会被误判。
+ */
+export function isSparseSpeech(text: string, duration: number): boolean {
+  const chars = countSpeechChars(text);
+  const seconds = Number.isFinite(duration) ? Math.max(0, duration) : 0;
+  if (seconds < 20) return false;
+  return chars < 50 || chars / seconds < 0.8;
+}
