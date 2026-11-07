@@ -27,7 +27,7 @@ export interface Settings {
   jumpAutoPlay: boolean;
   /** 提问时是否附带当前视频画面截图。 */
   frameEnabled: boolean;
-  /** D6 本地 companion 地址；末尾不带斜杠。 */
+  /** 本地 companion 地址（知识库链路用）；末尾不带斜杠。 */
   companionUrl: string;
   /** D8 语音转写 Key（SiliconFlow）。 */
   asrApiKey: string;

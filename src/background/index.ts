@@ -2034,7 +2034,7 @@ ensureAsrRefererRule();
 chrome.runtime.onInstalled.addListener(() => ensureAsrRefererRule());
 chrome.runtime.onStartup.addListener(() => ensureAsrRefererRule());
 
-/** 同步队列已删除（落盘改成「存到知识库」按钮触发），清掉历史遗留的 sync:* 键。 */
+/** 同步队列已删除；知识库入口 2026-11-07 已隐藏，这里只清历史遗留的 sync:* 键。 */
 void chrome.storage.local
   .get(null)
   .then(all => {
