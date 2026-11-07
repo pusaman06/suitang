@@ -66,10 +66,6 @@ function audioCandidates(items: AudioItem[] | undefined): AudioTrack[] {
   );
 }
 
-function pickAudio(items: AudioItem[] | undefined): AudioTrack | null {
-  return audioCandidates(items)[0] ?? null;
-}
-
 /** 页面首屏/SPA 切 P 后注入的 __playinfo__ 通常已有音轨，优先用它，避免 playurl 的 CORS。 */
 async function readPageAudio(
   tabId: number,
@@ -252,9 +248,11 @@ async function fetchPlayUrl(aid: number, cid: number, bvid: string): Promise<Pag
     (Number.isFinite(Number(data.aid)) && Number(data.aid) !== aid) ||
     (Number.isFinite(Number(data.cid)) && Number(data.cid) !== cid);
   if (stale) return { ok: false, stale: true, error: '播放地址和当前分 P 不一致，请稍后重试' };
-  const track = pickAudio(data.dash?.audio);
-  if (!track) return { ok: false, error: '这个视频没有可下载的音轨' };
-  return { ok: true, audios: [track] };
+  // 返回全部排序后的候选，而不是只取第一条：页面音轨不可用时只能走这里，
+  // 如果只带一条地址，「下载失败换下一条」的兜底就失效了。
+  const audios = audioCandidates(data.dash?.audio);
+  if (!audios.length) return { ok: false, error: '这个视频没有可下载的音轨' };
+  return { ok: true, audios };
 }
 
 /** 先读页面 __playinfo__，再退到 background 的 playurl 请求。 */

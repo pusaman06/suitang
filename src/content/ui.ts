@@ -701,6 +701,8 @@ export function mountUi(info: VideoInfo): UiHandle {
     asrTranscribing = false;
     asrDone = false;
     asrSegments = 0;
+    // 切 P 后不能把「转写完顺手生成大纲」的请求带到新分 P 上。
+    pendingOutlineAfterAsr = null;
     asrKey = outlineInfoKey(currentInfo);
     outlineEmptyText.textContent = OUTLINE_EMPTY_TEXT;
     outlineList.replaceChildren();

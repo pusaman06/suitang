@@ -592,7 +592,20 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
   if (!duration || duration <= 0) throw new AsrFailure('unknown', '读取不到视频时长');
 
   const cached = await readAsrResult(request.bvid, request.p, cid);
-  if (cached) return cached;
+  if (cached) {
+    // 低信息量转写也会写缓存（不让用户重复花钱），但再次点击时不能当成功返回：
+    // 否则面板先显示「已转写」，随后生成大纲又报「几乎没有口播」，自相矛盾。
+    const cachedText = asrCues(cached)
+      .map(cue => cue.content)
+      .join(' ');
+    if (isSparseSpeech(cachedText, cached.duration || duration)) {
+      throw new AsrFailure(
+        'empty',
+        `只识别到 ${countSpeechChars(cachedText)} 个字，这段视频几乎没有口播`,
+      );
+    }
+    return cached;
+  }
 
   const track = await getAudioTrack(tabId, meta.aid, cid, request.bvid, duration);
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 0, total: 1 });
@@ -619,12 +632,12 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
     }
   }
   if (!buffer) {
-    throw new AsrFailure(
-      'download',
-      `下载音轨失败：网络请求失败，请重试（${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }）`,
-    );
+    // downloadAudio 的错误自带「下载音轨失败：」前缀，这里别再叠一层。
+    const detail = lastError instanceof Error ? lastError.message : String(lastError);
+    const reason = detail.startsWith('下载音轨失败：')
+      ? detail.slice('下载音轨失败：'.length)
+      : detail;
+    throw new AsrFailure('download', `下载音轨失败：网络请求失败，请重试（${reason}）`);
   }
   sendAsrProgress(tabId, { ...request, cid }, { stage: 'download', done: 1, total: 1 });
 
@@ -1066,10 +1079,14 @@ async function generateOutline(
     const retryableSubtitleError = (message: string): boolean =>
       /缓存错乱|对不上|请求失败|HTTP|不是合法 JSON|没有有效句子/.test(message);
     let subtitle: { cues: SubtitleCue[]; track: SubtitleTrack | null } | null = null;
+    // 字幕链路失败的真实原因（登录失效 / 接口错乱 / 无中文轨 / 只有音乐）。
+    // 以前不管什么原因都只报一句「没有字幕」，用户没法判断该登录、该重试还是该转写。
+    let subtitleFailure = '';
     try {
       subtitle = await outlineCues(tabId, request);
     } catch (error) {
       if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
+      subtitleFailure = error.message;
       // 只是暂时故障才值得再试一次；「真没字幕 / 需要登录」直接走下面的兜底。
       if (retryableSubtitleError(error.message)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1080,6 +1097,7 @@ async function generateOutline(
             throw retryError;
           }
           // 两次都失败：保持「没有可用字幕」兜底，交给 ASR / 画面那条路。
+          subtitleFailure = retryError.message;
         }
       }
     }
@@ -1090,7 +1108,12 @@ async function generateOutline(
         ? `字幕 ${subtitle.track.lan}${subtitle.track.lan_doc ? `（${subtitle.track.lan_doc}）` : ''}`
         : '字幕（本地缓存）';
     } else {
-      const asr = await readAsrResult(request.bvid, request.p, request.cid);
+      // 面板传来的 cid 可能是上一个视频/分 P 的（SPA 切换后 __INITIAL_STATE__ 滞后）；
+      // 转写缓存是按页面 meta 的口径写的，这里用视频接口兜底，避免「刚转写完却读不到」。
+      const meta = await readVideoMeta(tabId, request.bvid).catch(() => null);
+      const asrCid =
+        meta?.pages.find(item => item.page === request.p)?.cid ?? request.cid;
+      const asr = await readAsrResult(request.bvid, request.p, asrCid);
       if (asr) {
         const asrText = asrCues(asr)
           .map(cue => cue.content)
@@ -1128,9 +1151,14 @@ async function generateOutline(
       throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
     }
     if (cues.length === 0) {
+      // 把字幕链路的真实原因带出来，但保留「这个视频没有字幕」前缀（e2e 与文案习惯）。
+      const reason = subtitleFailure.trim();
+      const informative = reason !== '' && !/没有字幕|没有可用字幕/.test(reason);
       throw new OutlineFailure(
         'no-subtitle',
-        '这个视频没有字幕。先点「转写这段」，转完再生成大纲；也可以「按画面生成」用截图凑一份',
+        informative
+          ? `这个视频没有字幕（${reason}）。可以先点「转写这段」，或「按画面生成」用截图凑一份`
+          : '这个视频没有字幕。先点「转写这段」，转完再生成大纲；也可以「按画面生成」用截图凑一份',
       );
     }
 
@@ -1886,6 +1914,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8' },
           body: JSON.stringify(body),
+          // companion 挂起/端口被占用时 fetch 会一直挂着，UI 就永远停在「写入中…」。
+          signal: AbortSignal.timeout(15_000),
         });
         const data = (await response.json().catch(() => null)) as
           | { ok?: boolean; relative?: string; overwrote?: boolean; message?: string }
@@ -1985,7 +2015,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             type: 'asr:done',
             bvid: request.bvid,
             p: request.p,
-            cid: request.cid,
+            // 用转写结果里推导出的 cid（页面 meta 口径），不是面板传来的旧 cid。
+            cid: result.cid,
             asr: result,
           });
         })
