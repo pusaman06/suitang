@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 import { getExtensionId, launchWithExtension, SHOT_DIR } from './helpers';
 
-test('设置页：没有落盘开关，并说明只有点「存到知识库」才写盘', async () => {
+test('设置页：没有落盘开关，也不自动写盘', async () => {
   const context = await launchWithExtension();
   const id = await getExtensionId(context);
   const page = await context.newPage();
@@ -15,7 +15,6 @@ test('设置页：没有落盘开关，并说明只有点「存到知识库」�
   await expect(page.locator('#sync-enabled')).toHaveCount(0);
   await expect(page.locator('#companion-url')).toBeVisible();
   await expect(page.locator('details > .hint')).toContainText('看视频不会自动往硬盘写任何东西');
-  await expect(page.locator('details > .hint')).toContainText('50-底稿');
 
   await page.locator('#companion-url').scrollIntoViewIfNeeded();
   await page.screenshot({ path: resolve(SHOT_DIR, 'options-sync.png'), fullPage: false });

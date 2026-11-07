@@ -281,9 +281,8 @@ test('点重新生成会再请求一次，并用新结果替换旧大纲', async
       title: `新分段 ${i + 1}`,
     })),
   );
-  // 「重新生成」现在先展开选择，点了「自动挑一种」才真的重跑。
+  // 重新生成直接用同一种方式再跑一次。
   await page.locator('.vt-outline-refresh').click();
-  await page.locator('.vt-outline-choice[data-mode="auto"]').click();
   await expect(page.locator('.vt-outline-item').first()).toContainText('新分段 1', {
     timeout: 30_000,
   });
@@ -456,7 +455,7 @@ test('无字幕无章节：抽帧送视觉模型生成大纲，结束后恢复�
   }
 });
 
-test('无字幕只有 UP 章节：不直接拿章节名凑数，提示先补字幕', async () => {
+test('无字幕只有 UP 章节：不直接拿章节名凑数，提示先转写', async () => {
   await clearStorage(context, extensionId);
   await outlineSettings();
   await clearOutlineCache();
@@ -485,121 +484,15 @@ test('无字幕只有 UP 章节：不直接拿章节名凑数，提示先补字�
     const before = mock.requests.length;
     await page.locator('.vt-outline-generate').click();
     // 只有章节名、没有内容说明的大纲等于没讲，宁可先要字幕。
-    await expect(page.locator('.vt-outline-empty-text')).toContainText('UP 主只分了章节标题', {
+    await expect(page.locator('.vt-outline-empty-text')).toContainText('这个视频没有字幕', {
       timeout: 20_000,
     });
-    expect(mock.requests.length).toBe(before);
-
-    // 用户明确要「用 UP 主章节」时才直接给章节。
-    await expect(page.locator('.vt-outline-chapters')).toBeVisible({ timeout: 20_000 });
-    await page.locator('.vt-outline-chapters').click();
-    await expect(page.locator('.vt-outline-item')).toHaveCount(3, { timeout: 20_000 });
-    await expect(page.locator('.vt-outline-diag')).toContainText('UP 章节');
-    await expect(page.locator('.vt-outline-item').first()).toContainText('开场与自我介绍');
+    // 章节名不再能直接变成大纲。
+    await expect(page.locator('.vt-outline-chapters')).toHaveCount(0);
+    await expect(page.locator('.vt-outline-item')).toHaveCount(0);
     expect(mock.requests.length).toBe(before);
   } finally {
     await context.unroute('**/x/player/v2**', chapterRoute);
-  }
-});
-
-test('点「重新生成」先展开选择：走不通的置灰并写明原因', async () => {
-  await clearStorage(context, extensionId);
-  await outlineSettings();
-  await clearOutlineCache();
-
-  const emptyRoute = async (route: Route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        code: 0,
-        data: { subtitle: { subtitles: [] }, view_points: [] },
-      }),
-    });
-  };
-
-  await context.route('**/x/player/v2**', emptyRoute);
-  try {
-    await openPanel(page);
-    await seedOutlineCues();
-    await page.locator('.vt-outline-generate').click();
-    await expect(page.locator('.vt-outline-diag')).toContainText('模型按字幕切', {
-      timeout: 20_000,
-    });
-
-    await page.locator('.vt-outline-refresh').click();
-    const choices = page.locator('.vt-outline-choices');
-    await expect(choices).toBeVisible();
-    await expect(page.locator('.vt-outline-choice')).toHaveCount(5);
-    // 这个视频没有 UP 章节：那一项点不了，而且得说清为什么。
-    const chaptersChoice = page.locator('.vt-outline-choice[data-mode="chapters"]');
-    await expect(chaptersChoice).toBeDisabled();
-    await expect(chaptersChoice).toContainText('没有给这个视频分章节');
-    // 没配语音转写 Key：转写那条也点不了。
-    const asrChoice = page.locator('.vt-outline-choice[data-mode="asr"]');
-    await expect(asrChoice).toBeDisabled();
-    await expect(asrChoice).toContainText('没配语音转写 Key');
-    // 有字幕 + 有 key：字幕那条可点，且标出这就是当前用的方式。
-    const subtitleChoice = page.locator('.vt-outline-choice[data-mode="subtitle"]');
-    await expect(subtitleChoice).toBeEnabled();
-    await expect(subtitleChoice).toContainText('当前');
-
-    await page.locator('.vt-outline-choices-cancel').click();
-    await expect(choices).toBeHidden();
-    // 关掉选择不该动原来的大纲。
-    await expect(page.locator('.vt-outline-item').first()).toBeVisible();
-  } finally {
-    await context.unroute('**/x/player/v2**', emptyRoute);
-  }
-});
-
-test('选「用 UP 主章节」就换成章节，不重新问模型', async () => {
-  await clearStorage(context, extensionId);
-  await outlineSettings();
-  await clearOutlineCache();
-
-  let chaptersOn = false;
-  const route = async (request: Route) => {
-    await request.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        code: 0,
-        data: {
-          subtitle: { subtitles: [] },
-          view_points: chaptersOn
-            ? [
-                { from: 0, to: 40, content: '开场与自我介绍' },
-                { from: 40, to: 80, content: '感知机的历史' },
-                { from: 80, to: 120, content: 'M-P 神经元模型' },
-              ]
-            : [],
-        },
-      }),
-    });
-  };
-
-  await context.route('**/x/player/v2**', route);
-  try {
-    await openPanel(page);
-    await seedOutlineCues();
-    await page.locator('.vt-outline-generate').click();
-    await expect(page.locator('.vt-outline-diag')).toContainText('模型按字幕切', {
-      timeout: 20_000,
-    });
-
-    chaptersOn = true;
-    await page.locator('.vt-outline-refresh').click();
-    const before = mock.requests.length;
-    await page.locator('.vt-outline-choice[data-mode="chapters"]').click();
-    await expect(page.locator('.vt-outline-diag')).toContainText('UP 章节', {
-      timeout: 20_000,
-    });
-    await expect(page.locator('.vt-outline-item')).toHaveCount(3);
-    // 章节不用模型切段；但这条视频有字幕，所以会补一次「每段讲了什么」。
-    expect(mock.requests.length).toBe(before + 1);
-  } finally {
-    await context.unroute('**/x/player/v2**', route);
   }
 });
 

@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SHOT_DIR,
@@ -87,15 +86,13 @@ test('短视频 BV1XnxP6vEdX（0:55 无人声）明确提示而不是报格式�
 
 /**
  * 待办 3b：BV1aRxX6iE7h（52:08，无字幕无章节，887 句 ASR）。
- * 走「转写 → 生成大纲 → 存知识库」，量笔记和底稿的实际大小回答「会不会撑爆」。
+ * 走「手动转写 → 生成大纲」，验证长视频链路。
  */
-test('长视频 BV1aRxX6iE7h（52:08）转写入库并量 md 大小', async () => {
+test('长视频 BV1aRxX6iE7h（52:08）转写并生成大纲', async () => {
   test.setTimeout(900_000);
   const sfKey = process.env.SILICONFLOW_KEY ?? '';
   const dsKey = process.env.DS_KEY ?? '';
   test.skip(sfKey === '' || dsKey === '', '需要 .env 里的 SILICONFLOW_KEY 和 DS_KEY');
-  const companion = await fetchCompanionStatus();
-  test.skip(companion === null, '需要先在终端跑 pnpm companion');
 
   const context = await launchWithExtension();
   const extensionId = await getExtensionId(context);
@@ -123,10 +120,27 @@ test('长视频 BV1aRxX6iE7h（52:08）转写入库并量 md 大小', async () =
     await expect(page.locator('.vt-panel')).toBeVisible();
 
     // 52 分钟超过自动转写上限（15 分钟），要手动点「转写这段」。
+    // 长音频上传受网络影响，偶发失败（Failed to fetch / 超时）；失败时打印原因并重试一次。
     const t0 = Date.now();
     await expect(page.locator('.vt-outline-asr')).toBeVisible({ timeout: 30_000 });
-    await page.locator('.vt-outline-asr').click();
-    await expect(page.locator('.vt-outline-asr')).toHaveText('已转写', { timeout: 600_000 });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (attempt === 1) await page.locator('.vt-outline-asr').click();
+      try {
+        await expect(page.locator('.vt-outline-asr')).toHaveText('已转写', { timeout: 420_000 });
+        break;
+      } catch (error) {
+        const err = await page.locator('.vt-outline-error-text').innerText().catch(() => '');
+        const empty = await page.locator('.vt-outline-empty-text').innerText().catch(() => '');
+        console.log(
+          `===LONG-ASR-FAIL=== attempt=${attempt} 错误=${JSON.stringify(err)} 空态=${JSON.stringify(empty)}`,
+        );
+        if (attempt === 2) throw error;
+        // 失败后空态隐藏，错误块里的「重试」就是重新 startAsr()。
+        const retry = page.locator('.vt-outline-retry');
+        if (await retry.isVisible().catch(() => false)) await retry.click();
+        else await page.locator('.vt-outline-asr').click();
+      }
+    }
     console.log(`===LONG-ASR=== ${Date.now() - t0}ms`);
 
     const t1 = Date.now();
@@ -145,23 +159,8 @@ test('长视频 BV1aRxX6iE7h（52:08）转写入库并量 md 大小', async () =
     expect(details.filter(text => text !== '').length).toBeGreaterThanOrEqual(3);
     expect(conclusions.length).toBeGreaterThanOrEqual(1);
 
-    // 存到知识库，然后量实际文件大小。
-    await page.locator('.vt-kb-open').click();
-    await expect(page.locator('.vt-kb')).toBeVisible({ timeout: 60_000 });
-    await page.locator('.vt-kb-confirm').click();
-    await expect(page.locator('.vt-status')).toContainText(/已存|已覆盖/, { timeout: 180_000 });
-    console.log('===LONG-SAVED=== ' + (await page.locator('.vt-status').innerText()));
-    await page.screenshot({ path: join(SHOT_DIR, 'd10-long-kb-saved.png') });
-
-    const kbDir = companion?.kbDir ?? 'D:\\knowledge-base';
-    const note = latestFile(join(kbDir, '20-知识笔记'), /BV1aRxX6iE7h/);
-    const source = latestFile(join(kbDir, '50-底稿', '视频原文', 'BV1aRxX6iE7h'), /-p01/);
-    const noteText = note ? readFileSync(note, 'utf8') : '';
-    const sourceText = source ? readFileSync(source, 'utf8') : '';
-    console.log(`===LONG-SIZES=== 笔记 ${noteText.length} 字符 ${byteSize(note)} 字节；底稿 ${sourceText.length} 字符 ${byteSize(source)} 字节`);
-    console.log('===LONG-SOURCE-HEAD===\n' + sourceText.slice(0, 600));
-    expect(noteText).toContain('## 核心结论');
-    expect(sourceText).toContain('## 字幕');
+    // 知识库入口已隐藏（D9 冻结），这里只验证大纲能出来。
+    await expect(page.locator('.vt-kb-open')).toHaveCount(0);
   } finally {
     await clearStorage(context, extensionId).catch(() => undefined);
     await context.close();
@@ -266,13 +265,28 @@ test('SPA 内切分 P 后转写不再误报分 P 不一致', async () => {
     // 真实用户切 P 的方式：点分 P 列表，只改 URL 不刷新页面。
     // 分 P 项里没有 <a>（整个 div 走事件委托），且列表顶部会被固定导航栏挡住，
     // 所以用 DOM click 触发同一条 SPA 路由。
+    // 首次点击偶尔会被播放器初始化吃掉（URL 只多出 vd_source 不变 p），重试几次。
     await expect(page.locator('.video-pod__item').nth(1)).toBeVisible({ timeout: 30_000 });
-    await page.evaluate(() => {
-      const items = [...document.querySelectorAll('.video-pod__item')];
-      const target = (items[1].querySelector('a') ?? items[1]) as HTMLElement;
-      target.click();
-    });
-    await expect(page).toHaveURL(/[?&]p=2/, { timeout: 30_000 });
+    let switched = false;
+    for (let attempt = 1; attempt <= 3 && !switched; attempt += 1) {
+      const clicked = await page.evaluate(() => {
+        const items = [...document.querySelectorAll<HTMLElement>('.video-pod__item')];
+        const target = items.find(item => /(^|\s)02\./.test(item.innerText)) ?? items[1];
+        if (!target) return false;
+        (target.querySelector('a') ?? target).click();
+        return true;
+      });
+      if (!clicked) {
+        await page.waitForTimeout(500);
+        continue;
+      }
+      switched = await page
+        .waitForURL(/[?&]p=2/, { timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!switched) await page.waitForTimeout(800);
+    }
+    expect(switched).toBe(true);
     await expect(page.locator('.vt-part')).toContainText('P2', { timeout: 30_000 });
     await page.waitForTimeout(1500);
     console.log(
@@ -408,32 +422,3 @@ test('字幕只有音乐标记的分 P 不报格式错', async () => {
   }
 });
 
-async function fetchCompanionStatus(): Promise<{ kbDir?: string } | null> {
-  try {
-    const response = await fetch('http://127.0.0.1:8787/api/kb/status');
-    return response.ok ? ((await response.json()) as { kbDir?: string }) : null;
-  } catch {
-    return null;
-  }
-}
-
-function latestFile(dir: string, pattern: RegExp): string | null {
-  try {
-    const files = readdirSync(dir)
-      .filter(name => pattern.test(name))
-      .map(name => ({ name, mtime: statSync(join(dir, name)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return files.length > 0 ? join(dir, files[0].name) : null;
-  } catch {
-    return null;
-  }
-}
-
-function byteSize(path: string | null): number {
-  if (!path) return 0;
-  try {
-    return statSync(path).size;
-  } catch {
-    return 0;
-  }
-}

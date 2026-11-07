@@ -1,12 +1,14 @@
-# Video Tutor（D1 脚手架）
+# Video Tutor
 
-B 站看课助手：暂停提问，AI 结合字幕与当前画面回答，并给出可点击的时间戳。
-完整方案见 [`docs/plan.md`](docs/plan.md)。
+B 站看课助手：暂停提问，AI 结合字幕与当前画面回答，并给出可点击的时间戳；也能按字幕生成大纲。
+技术方案见 [`docs/plan.md`](docs/plan.md)，路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
 
-## 当前进度
+## 现在能做什么
 
-- D1：MV3 脚手架、B 站视频页注入悬浮球、识别 `bvid / 分P / cid`、`Alt+Q` 开关面板、设置页骨架。
-- D2 起：字幕抓取、DeepSeek 流式问答、时间戳跳转。
+- **字幕**：有官方 / AI 字幕就直接抓；没有就语音转写（SiliconFlow SenseVoice）。15 分钟以内的视频自动转，更长的点「转写这段」手动跑。
+- **大纲**：按字幕切段，每段一句说明，另给几条核心结论；完全没有字幕时可以「按画面生成」，用几张截图凑一份粗大纲。
+- **问答**：暂停后点悬浮球或按 `Alt+Q`，回答带可点击的时间戳；支持同一视频内追问、以及「这页 PPT 写的什么」这类画面题。
+- **成本**：每条回答带 ≈¥，面板显示今日 / 本月，设置页有预算和余额。
 
 ## 开发
 
@@ -14,6 +16,7 @@ B 站看课助手：暂停提问，AI 结合字幕与当前画面回答，并给
 pnpm install
 pnpm typecheck
 pnpm build
+npx playwright test
 ```
 
 `dist/` 就是可加载的扩展目录。
@@ -29,33 +32,6 @@ Copy-Item .env.example .env
 `playwright.config.ts` 会自动加载 `.env`（`process.loadEnvFile`），没填 key 的用例会自动 skip 而不是报错。
 `.env` 已在 `.gitignore` 里，不会进仓库。
 
-## 存到个人知识库
-
-**看视频本身不会往硬盘写任何东西**——没有自动落盘、没有后台同步。只有你在面板上点「**存到知识库**」，才会写盘。
-
-点一下会拿这期视频的标题、大纲、问答拼成一条 Markdown 笔记，先显示在面板里让你改，点「写入知识库」才真正落盘。确认时一次写两份：
-
-| 写什么 | 落在哪 | 进不进搜索 |
-|---|---|---|
-| 索引卡（摘要/大纲/关键词） | `<知识库根>/20-知识笔记/<日期>-<标题>（<BV号>）.md` | 进 |
-| 原文底稿（逐句字幕 + 问答） | `<知识库根>/50-底稿/视频原文/<BV号>/<BV号>-p<NN>.md` | **不进**（`50-底稿` 在插件默认排除目录里） |
-
-默认根目录 `D:\knowledge-base`（`D:\knowledge-base\_模板\视频笔记.md` 是格式说明）。写进去之后，知识库插件的 watcher 大约 8 秒会把它索引进库，之后就能用 `kb_search` 搜到。
-
-**这一步需要本地 companion 在跑**（浏览器扩展不能直接写任意磁盘路径）：
-
-```powershell
-pnpm companion
-```
-
-看到 `kb dir:` 那行就说明起来了，窗口留着别关。companion 默认监听 `127.0.0.1:8787`，也可以在设置页改地址。知识库在别的盘就加参数：
-
-```powershell
-node companion/server.mjs --kb "E:\my-kb"
-```
-
-没开 companion 就点保存，面板会直接告诉你「连不上 companion」，不会静默失败。
-
 ## 在 Edge 里加载
 
 1. 打开 `edge://extensions/`
@@ -69,9 +45,11 @@ node companion/server.mjs --kb "E:\my-kb"
 ## 目录
 
 ```
-src/content/     页面检测、悬浮球/面板
-src/background/  后台消息、快捷键、工具栏图标
-src/options/     设置页（API Key / 模型）
-src/shared/      类型与设置
+src/content/     页面检测、悬浮球 / 面板
+src/background/  后台消息、字幕抓取、语音转写、大纲、问答
+src/options/     设置页（API Key / 模型 / 预算）
+src/shared/      类型、协议、提示词、解析
 public/          manifest 与静态资源
+e2e/             Playwright 用例（mock + 真实 Key 两套）
+companion/       本地小服务（目前只服务已冻结的知识库链路）
 ```

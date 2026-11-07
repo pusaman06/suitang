@@ -6,8 +6,6 @@ import type { UsageLedger } from '../shared/usage-store';
 import {
   outlineFrameTimes,
   type Outline,
-  type OutlineCapabilities,
-  type OutlineCapabilitiesResponse,
   type OutlineGenerateResponse,
   type OutlineGetResponse,
   type OutlineMode,
@@ -76,19 +74,12 @@ export function mountUi(info: VideoInfo): UiHandle {
               <span class="vt-outline-cost">约 5–10 秒</span>
               <button class="vt-outline-asr" type="button">转写这段</button>
               <span class="vt-outline-asr-hint"></span>
-              <button class="vt-outline-chapters" type="button" hidden>按章节生成</button>
               <button class="vt-outline-frames" type="button" hidden>按画面生成</button>
             </div>
           </div>
           <ol class="vt-outline-list" hidden></ol>
-          <div class="vt-outline-choices" hidden>
-            <div class="vt-outline-choices-title">换一种方式生成</div>
-            <div class="vt-outline-choices-hint">当前大纲会保留，新的成功后才替换。</div>
-            <div class="vt-outline-choice-list"></div>
-            <button class="vt-outline-choices-cancel" type="button">取消</button>
-          </div>
           <div class="vt-outline-foot" hidden>
-            <button class="vt-outline-refresh" type="button" title="换一种方式重新生成">
+            <button class="vt-outline-refresh" type="button" title="按字幕重新生成">
               重新生成
             </button>
           </div>
@@ -108,19 +99,7 @@ export function mountUi(info: VideoInfo): UiHandle {
       <div class="vt-composer">
         <textarea class="vt-input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="vt-actions">
-          <button class="vt-kb-open" type="button" title="把这期视频的资料存进个人知识库">存到知识库</button>
           <button class="vt-send">发送</button>
-        </div>
-      </div>
-      <div class="vt-kb" hidden>
-        <div class="vt-kb-head">
-          <span class="vt-kb-title">存到知识库</span>
-          <span class="vt-kb-hint"></span>
-        </div>
-        <textarea class="vt-kb-preview" rows="8" spellcheck="false"></textarea>
-        <div class="vt-kb-foot">
-          <button class="vt-kb-confirm" type="button">写入知识库</button>
-          <button class="vt-kb-cancel" type="button">取消</button>
         </div>
       </div>
     </section>`;
@@ -143,12 +122,8 @@ export function mountUi(info: VideoInfo): UiHandle {
   const outlineGenerate = must<HTMLButtonElement>(shadow, '.vt-outline-generate');
   const outlineAsr = must<HTMLButtonElement>(shadow, '.vt-outline-asr');
   const outlineFrames = must<HTMLButtonElement>(shadow, '.vt-outline-frames');
-  const outlineChapters = must<HTMLButtonElement>(shadow, '.vt-outline-chapters');
   const outlineAsrHint = must<HTMLElement>(shadow, '.vt-outline-asr-hint');
   const outlineList = must<HTMLOListElement>(shadow, '.vt-outline-list');
-  const outlineChoices = must<HTMLElement>(shadow, '.vt-outline-choices');
-  const outlineChoiceList = must<HTMLElement>(shadow, '.vt-outline-choice-list');
-  const outlineChoicesCancel = must<HTMLButtonElement>(shadow, '.vt-outline-choices-cancel');
   const outlineFoot = must<HTMLElement>(shadow, '.vt-outline-foot');
   const outlineRefresh = must<HTMLButtonElement>(shadow, '.vt-outline-refresh');
   const outlineError = must<HTMLElement>(shadow, '.vt-outline-error');
@@ -162,12 +137,6 @@ export function mountUi(info: VideoInfo): UiHandle {
   const frameHint = must<HTMLElement>(shadow, '.vt-frame-hint');
   const input = must<HTMLTextAreaElement>(shadow, '.vt-input');
   const send = must<HTMLButtonElement>(shadow, '.vt-send');
-  const kbOpen = must<HTMLButtonElement>(shadow, '.vt-kb-open');
-  const kbBox = must<HTMLElement>(shadow, '.vt-kb');
-  const kbPreview = must<HTMLTextAreaElement>(shadow, '.vt-kb-preview');
-  const kbHint = must<HTMLElement>(shadow, '.vt-kb-hint');
-  const kbConfirm = must<HTMLButtonElement>(shadow, '.vt-kb-confirm');
-  const kbCancel = must<HTMLButtonElement>(shadow, '.vt-kb-cancel');
 
   let currentInfo = info;
   let settings: Settings | null = null;
@@ -295,120 +264,6 @@ export function mountUi(info: VideoInfo): UiHandle {
       })
       .catch(() => {
         status.textContent = '清空失败，稍后再试';
-      });
-  });
-
-  /** 「存到知识库」：先拉问答记录 → 让 background 拼草稿 → 面板里可改 → 确认才写盘。 */
-  let kbBusy = false;
-  let kbFileName = '';
-  /** 原文底稿（字幕 + 大纲 + 问答），确认时和索引卡一起写进知识库。 */
-  let kbSourceMarkdown = '';
-
-  const draftKb = async (): Promise<void> => {
-    if (kbBusy) return;
-    kbBusy = true;
-    kbOpen.disabled = true;
-    kbOpen.textContent = '生成中…';
-    try {
-      const history = (await chrome.runtime.sendMessage({
-        type: 'qa:history',
-        bvid: currentInfo.bvid,
-        p: currentInfo.p,
-      })) as { ok?: boolean; records?: QaRecord[] } | undefined;
-      const qa = (history?.records ?? []).map(record => ({
-        question: record.question,
-        answer: record.answer,
-      }));
-      const response = (await chrome.runtime.sendMessage({
-        type: 'kb:draft',
-        info: currentInfo,
-        segments: outline?.segments ?? [],
-        qa,
-      })) as
-        | {
-            ok?: boolean;
-            fileName?: string;
-            markdown?: string;
-            sourceMarkdown?: string;
-            usedModel?: boolean;
-            message?: string;
-          }
-        | undefined;
-      if (!response?.ok) {
-        status.textContent = response?.message ?? '生成笔记草稿失败';
-        return;
-      }
-      kbFileName = response.fileName ?? '';
-      kbSourceMarkdown = response.sourceMarkdown ?? '';
-      kbPreview.value = response.markdown ?? '';
-      kbHint.textContent = response.usedModel
-        ? `${kbFileName} · 摘要由模型生成，可直接改；字幕原文一并存入 50-底稿`
-        : `${kbFileName} · 没配 API Key，只有资料没有摘要；字幕原文一并存入 50-底稿`;
-      kbBox.hidden = false;
-      kbBox.scrollIntoView({ block: 'start' });
-      kbPreview.focus();
-      // focus() 会把光标带到末尾并滚动，这里强制回到开头。
-      kbPreview.setSelectionRange(0, 0);
-      kbPreview.scrollTop = 0;
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : '生成笔记草稿失败';
-    } finally {
-      kbBusy = false;
-      kbOpen.disabled = false;
-      kbOpen.textContent = '存到知识库';
-    }
-  };
-
-  kbOpen.addEventListener('click', () => {
-    void draftKb();
-  });
-
-  kbCancel.addEventListener('click', () => {
-    kbBox.hidden = true;
-    kbPreview.value = '';
-    kbFileName = '';
-    kbSourceMarkdown = '';
-  });
-
-  kbConfirm.addEventListener('click', () => {
-    if (kbBusy) return;
-    if (kbPreview.value.trim() === '') {
-      kbHint.textContent = '内容为空，没什么可存的';
-      return;
-    }
-    kbBusy = true;
-    kbConfirm.disabled = true;
-    kbConfirm.textContent = '写入中…';
-    void chrome.runtime
-      .sendMessage({
-        type: 'kb:save',
-        fileName: kbFileName,
-        markdown: kbPreview.value,
-        sourceMarkdown: kbSourceMarkdown,
-        bvid: currentInfo.bvid,
-        p: currentInfo.p,
-      })
-      .then(response => {
-        const result = response as
-          | { ok?: boolean; relative?: string; overwrote?: boolean; source?: string; message?: string }
-          | undefined;
-        if (!result?.ok) {
-          kbHint.textContent = result?.message ?? '写入失败';
-          return;
-        }
-        kbBox.hidden = true;
-        kbPreview.value = '';
-        kbSourceMarkdown = '';
-        const sourceTail = result.source ? `；原文存到 ${result.source}` : '';
-        status.textContent = `${result.overwrote ? '已覆盖' : '已存入'} ${result.relative}${sourceTail}（约 8 秒后可搜到）`;
-      })
-      .catch(error => {
-        kbHint.textContent = error instanceof Error ? error.message : '写入失败';
-      })
-      .finally(() => {
-        kbBusy = false;
-        kbConfirm.disabled = false;
-        kbConfirm.textContent = '写入知识库';
       });
   });
 
@@ -634,7 +489,6 @@ export function mountUi(info: VideoInfo): UiHandle {
       outlineEmpty.hidden = true;
       outlineError.hidden = true;
       outlineFrames.hidden = true;
-      outlineChapters.hidden = true;
       renderOutlineList();
     } else {
       outlineList.hidden = true;
@@ -842,28 +696,6 @@ export function mountUi(info: VideoInfo): UiHandle {
     }
   }
 
-  /**
-   * 没生成成功时「重新生成」的选项面板不会出现，所以单独探一次有没有 UP 章节。
-   * 有就给一条「按章节生成」，否则没字幕 + 有章节的视频就没有任何能走的路。
-   */
-  async function probeChapters(): Promise<void> {
-    const info = currentInfo;
-    if (!info.cid || !info.duration || info.duration <= 0) return;
-    const response = (await chrome.runtime
-      .sendMessage({
-        type: 'outline:capabilities',
-        bvid: info.bvid,
-        p: info.p,
-        cid: info.cid,
-        title: info.title,
-        duration: info.duration,
-      })
-      .catch(() => undefined)) as OutlineCapabilitiesResponse | undefined;
-    if (outlineInfoKey(currentInfo) !== outlineInfoKey(info)) return;
-    if (!response?.ok) return;
-    outlineChapters.hidden = !response.capabilities.chapters.available;
-  }
-
   async function generateOutline(mode: OutlineMode = 'auto'): Promise<void> {
     if (outlineGenerating) return;
     const requested = currentInfo;
@@ -875,12 +707,10 @@ export function mountUi(info: VideoInfo): UiHandle {
 
     const run = ++outlineRunToken;
     outlineGenerating = true;
-    hideOutlineChoices();
     outlineCapturing = false;
     outlineCaptureDone = 0;
     outlineCaptureTotal = 0;
     outlineFrames.hidden = true;
-    outlineChapters.hidden = true;
     clearOutlineError();
     outlineEmpty.hidden = false;
     outlineEmptyText.textContent = '正在生成大纲，请稍候…';
@@ -933,6 +763,13 @@ export function mountUi(info: VideoInfo): UiHandle {
           const asrSeconds = estimateAsrSeconds(requested.duration);
           renderOutlineState();
 
+          // 登录失效 / 接口错乱这类「暂时拿不到」：转写也救不了，直接说明白。
+          if (/登录|权限|错乱|对不上/.test(head)) {
+            outlineEmptyText.textContent = `${head}。可以先「按画面生成」用截图凑一份大纲。`;
+            outlineFrames.hidden = false;
+            return;
+          }
+
           // 没字幕时，光有 UP 主章节名等于没讲内容（「引言 / 新闻 / 磕头」）。
           // 有转写 Key 就自动补字幕：ASR 免费，这是唯一能把内容说清楚的路。
           if (asrReady && requested.duration > 0 && requested.duration <= AUTO_ASR_LIMIT_SECONDS) {
@@ -947,18 +784,12 @@ export function mountUi(info: VideoInfo): UiHandle {
           if (asrReady && requested.duration > AUTO_ASR_LIMIT_SECONDS) {
             outlineEmptyText.textContent = `${head}。转写要 ${describeAsrTime(asrSeconds)}，点「转写这段」开始；也可以「按画面生成」用截图凑一份大纲。`;
             outlineFrames.hidden = false;
-            outlineChapters.hidden = true;
-            void probeChapters();
             return;
           }
 
           // 没配转写 Key：明说卡在哪，别让人反复点。
           outlineEmptyText.textContent = `${head}。先在设置页填写语音转写 Key，再点「转写这段」；也可以「按画面生成」用截图凑一份大纲。`;
           outlineFrames.hidden = false;
-          // 没有大纲时「重新生成」的选项面板不会出现，这里单独给一条「按章节生成」，
-          // 否则没字幕 + 有章节的视频就没有任何能走的路。
-          outlineChapters.hidden = true;
-          void probeChapters();
           return;
         }
       }
@@ -1020,127 +851,6 @@ export function mountUi(info: VideoInfo): UiHandle {
     if (video && !video.paused) video.pause();
     seekVideo(segment.start, { autoPlay: settings?.jumpAutoPlay === true });
     setOutlineActive(index);
-  }
-
-  /* -------- 换一种方式生成 -------- */
-
-  interface OutlineChoice {
-    mode: OutlineMode;
-    name: string;
-    describe: (caps: OutlineCapabilities) => string;
-    usable: (caps: OutlineCapabilities) => boolean;
-    blocked: (caps: OutlineCapabilities) => string;
-  }
-
-  const OUTLINE_CHOICES: OutlineChoice[] = [
-    {
-      mode: 'auto',
-      name: '自动挑一种',
-      describe: caps =>
-        caps.chapters.available
-          ? `用 UP 章节（${caps.chapters.count} 段）`
-          : '按字幕切段，约 5–10 秒',
-      usable: caps => caps.textKey || caps.chapters.available,
-      blocked: () => '没配 API Key，这个视频也没有 UP 章节',
-    },
-    {
-      mode: 'subtitle',
-      name: '按官方字幕切',
-      describe: caps => `${caps.subtitle.label}，约 5–10 秒`,
-      usable: caps => caps.subtitle.available && caps.textKey,
-      blocked: caps => (caps.subtitle.available ? '没配 API Key' : '这个视频没有中文字幕'),
-    },
-    {
-      mode: 'asr',
-      name: '按语音转写切',
-      describe: caps =>
-        caps.asr.available ? '已经转写过，约 5–10 秒' : '要先转写这段，约 1–5 分钟',
-      usable: caps => caps.textKey && (caps.asr.available || caps.asrKey),
-      blocked: caps => (caps.textKey ? '没配语音转写 Key' : '没配 API Key'),
-    },
-    {
-      mode: 'chapters',
-      name: '用 UP 主章节',
-      describe: caps => `共 ${caps.chapters.count} 段，1 秒`,
-      usable: caps => caps.chapters.available,
-      blocked: () => 'UP 主没有给这个视频分章节',
-    },
-    {
-      mode: 'frames',
-      name: '按画面生成',
-      describe: () => '截图给模型看，约 20–60 秒',
-      usable: caps => caps.textKey,
-      blocked: () => '没配 API Key',
-    },
-  ];
-
-  function hideOutlineChoices(): void {
-    outlineChoices.hidden = true;
-    outlineChoiceList.textContent = '';
-  }
-
-  function renderOutlineChoices(caps: OutlineCapabilities): void {
-    outlineChoiceList.textContent = '';
-    const current = outline?.captions;
-    for (const def of OUTLINE_CHOICES) {
-      const usable = def.usable(caps);
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'vt-outline-choice';
-      button.dataset.mode = def.mode;
-      button.disabled = !usable;
-      // 已经转写过的，点了直接生成，不用再走一遍转写。
-      if (def.mode === 'asr' && caps.asr.available) button.dataset.ready = '1';
-
-      const name = document.createElement('span');
-      name.className = 'vt-outline-choice-name';
-      name.textContent = def.name;
-      if (def.mode === current) {
-        const badge = document.createElement('span');
-        badge.className = 'vt-outline-choice-badge';
-        badge.textContent = '当前';
-        name.append(badge);
-      }
-
-      const note = document.createElement('span');
-      note.className = 'vt-outline-choice-note';
-      note.textContent = usable ? def.describe(caps) : def.blocked(caps);
-      button.append(name, note);
-      outlineChoiceList.append(button);
-    }
-  }
-
-  async function openOutlineChoices(): Promise<void> {
-    if (outlineGenerating) return;
-    const requested = currentInfo;
-    if (!requested.duration || requested.duration <= 0) return;
-    if (!outlineChoices.hidden) {
-      hideOutlineChoices();
-      return;
-    }
-    outlineChoices.hidden = false;
-    outlineChoiceList.textContent = '';
-    const loading = document.createElement('p');
-    loading.className = 'vt-outline-choice-loading';
-    loading.textContent = '正在检查可用方式…';
-    outlineChoiceList.append(loading);
-
-    const response = (await chrome.runtime.sendMessage({
-      type: 'outline:capabilities',
-      bvid: requested.bvid,
-      p: requested.p,
-      cid: requested.cid,
-      title: requested.title,
-      duration: requested.duration,
-    })) as OutlineCapabilitiesResponse | undefined;
-
-    if (outlineChoices.hidden) return;
-    if (!response?.ok) {
-      loading.textContent =
-        response?.message ?? '检查失败。可以直接点「生成大纲」用自动方式。';
-      return;
-    }
-    renderOutlineChoices(response.capabilities);
   }
 
   /* -------- D8 语音转写 -------- */
@@ -1205,13 +915,12 @@ export function mountUi(info: VideoInfo): UiHandle {
     asrTranscribing = false;
     pendingOutlineAfterAsr = null;
     // 「没检测到人声」重试也没用，别把用户堵在只有一个「重试」的错误块里：
-    // 留在空态上，把「按章节 / 按画面」两条替代路露出来。
+    // 留在空态上，把「按画面生成」这条替代路露出来。
     if (code === 'empty') {
       outlineError.hidden = true;
       outlineEmpty.hidden = false;
-      outlineEmptyText.textContent = `转写失败：${message}。可以先看 UP 章节，或点「按画面生成」用截图凑一份大纲。`;
+      outlineEmptyText.textContent = `转写失败：${message}。可以直接点「按画面生成」用截图凑一份大纲。`;
       outlineFrames.hidden = false;
-      void probeChapters();
       renderOutline();
       return;
     }
@@ -1322,31 +1031,7 @@ export function mountUi(info: VideoInfo): UiHandle {
     outlineFrames.hidden = true;
     void generateOutline('frames');
   });
-  outlineChapters.addEventListener('click', () => {
-    if (outlineGenerating) return;
-    outlineChapters.hidden = true;
-    void generateOutline('chapters');
-  });
-  outlineRefresh.addEventListener('click', () => void openOutlineChoices());
-  outlineChoicesCancel.addEventListener('click', () => {
-    hideOutlineChoices();
-  });
-  outlineChoiceList.addEventListener('click', event => {
-    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
-      '.vt-outline-choice',
-    );
-    if (!button || button.disabled) return;
-    const mode = button.dataset.mode as OutlineMode | undefined;
-    if (!mode) return;
-    hideOutlineChoices();
-    if (mode === 'asr' && !button.dataset.ready) {
-      // 还没转写过：先转写，转完自动接上大纲生成。
-      pendingOutlineAfterAsr = 'asr';
-      void startAsr();
-      return;
-    }
-    void generateOutline(mode);
-  });
+  outlineRefresh.addEventListener('click', () => void generateOutline('auto'));
   outlineRetry.addEventListener('click', () => {
     const retry = outlineRetryAction;
     outlineRetryAction = null;

@@ -61,12 +61,12 @@ async function readPageAudio(
       target: { tabId },
       world: 'MAIN',
       args: [aid, cid, bvid, duration],
-      func: (
+      func: async (
         pageAid: number,
         pageCid: number,
         pageBvid: string,
         pageDuration: number,
-      ): PageAudioResult => {
+      ): Promise<PageAudioResult> => {
         const root = window as unknown as {
           __INITIAL_STATE__?: {
             p?: number;
@@ -83,6 +83,18 @@ async function readPageAudio(
             };
           };
         };
+        // 同 pickAudio：优先最低码率，ASR 不需要高音质，上传也更快。
+        const readAudios = (
+          items: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }>,
+        ): Array<{ url: string; bandwidth: number }> =>
+          items
+            .map(item => ({
+              url: item.baseUrl ?? item.base_url ?? '',
+              bandwidth: Number(item.bandwidth) || 0,
+            }))
+            .filter(item => item.url !== '')
+            .sort((a, b) => a.bandwidth - b.bandwidth);
+
         const state = root.__INITIAL_STATE__;
         const video = state?.videoData;
         const pages = video?.pages ?? [];
@@ -93,7 +105,7 @@ async function readPageAudio(
         const current = pages.find(item => item.page === pageNo) ?? pages[pageNo - 1];
         const currentCid = Number(current?.cid) || 0;
         // SPA 内切分 P 时 __playinfo__ 不会重新加载（仍是首屏分 P 的时长和音轨），
-        // 页面音轨不能拿来转写；但这不是「分 P 不一致」，改走后台 playurl 接口。
+        // 页面音轨不能拿来转写；但这不是「分 P 不一致」，改从接口取当前分 P 的音轨。
         const playLength = Number(root.__playinfo__?.data?.timelength) || 0;
         const playMismatch =
           pageDuration > 0 &&
@@ -107,18 +119,41 @@ async function readPageAudio(
           return { ok: false, stale: true, error: '播放地址和当前分 P 不一致，请稍后重试' };
         }
         if (playMismatch) {
-          return { ok: false, error: '播放器还在旧分 P，改从接口取音轨' };
+          // 在页面里直接请求 playurl：带页面 cookie，和 B 站前端播放器同一条路，
+          // 比 background 的 fetch 稳（SW 的跨域 fetch 偶发被浏览器策略拒掉，
+          // 报错就是 Failed to fetch）。
+          try {
+            const response = await fetch(
+              `https://api.bilibili.com/x/player/playurl?avid=${pageAid}&cid=${pageCid}` +
+                `&qn=0&fnval=16&fourk=1`,
+              { credentials: 'include' },
+            );
+            const payload = (await response.json()) as {
+              code?: number;
+              message?: string;
+              data?: {
+                dash?: { audio?: Array<{ baseUrl?: string; base_url?: string; bandwidth?: number }> };
+              };
+            };
+            if (payload.code === 0) {
+              const audios = readAudios(payload.data?.dash?.audio ?? []);
+              if (audios.length > 0) return { ok: true, audios };
+            }
+            return {
+              ok: false,
+              error: `页面 playurl 返回 code=${payload.code ?? '?'}${
+                payload.message ? `（${payload.message}）` : ''
+              }`,
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              error: `页面 playurl 请求失败：${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
         }
 
-        const items = root.__playinfo__?.data?.dash?.audio ?? [];
-        // 同 pickAudio：优先最低码率，ASR 不需要高音质，上传也更快。
-        const audios = items
-          .map(item => ({
-            url: item.baseUrl ?? item.base_url ?? '',
-            bandwidth: Number(item.bandwidth) || 0,
-          }))
-          .filter(item => item.url !== '')
-          .sort((a, b) => a.bandwidth - b.bandwidth);
+        const audios = readAudios(root.__playinfo__?.data?.dash?.audio ?? []);
         if (audios.length === 0) return { ok: false, error: '页面里还没有音轨地址' };
         return { ok: true, audios };
       },

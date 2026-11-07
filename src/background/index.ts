@@ -18,7 +18,6 @@ import {
   parseOutlineDetail,
 } from '../shared/outline-prompt';
 import {
-  coalesceSegments,
   framesToSegments,
   outlineStorageKey,
   parseFrameTitles,
@@ -26,7 +25,6 @@ import {
   repairTruncatedOutlineJson,
   thinOutlineLines,
   type Outline,
-  type OutlineCapabilities,
   type OutlineCaption,
   type OutlineErrorCode,
   type OutlineGenerateResponse,
@@ -46,14 +44,10 @@ import {
 } from '../shared/kb';
 import { extractCitationSeconds } from '../shared/citations';
 import {
-  buildPagePayload,
   CACHE_KEY_PREFIXES,
   pageStorageKey,
   readPageRecord,
-  writePageRecord,
   type CompanionPage,
-  type CompanionQa,
-  type PagePayloadInput,
 } from '../shared/video-record';
 import {
   QA_PORT_NAME,
@@ -665,21 +659,6 @@ async function qaCues(tabId: number, payload: QaAskPayload): Promise<SubtitleCue
   return asr ? asrCues(asr) : [];
 }
 
-/* ------------------------- 分 P 快照（chrome.storage 缓存） ------------------------- */
-
-async function cachedSubtitleLang(
-  bvid: string,
-  p: number,
-  cid: number | undefined,
-): Promise<string | undefined> {
-  if (!cid) return undefined;
-  const key = `sub:${bvid}:${p}:${cid}`;
-  const stored = await chrome.storage.local.get(key);
-  const cache = stored[key] as SubtitleCache | undefined;
-  const lan = cache?.track?.lan;
-  return typeof lan === 'string' && lan !== '' ? lan : undefined;
-}
-
 /** 存底稿时补字幕：页面记录里没有，就从字幕缓存 / ASR 缓存里捞一份。 */
 async function readCuesForSource(
   bvid: string,
@@ -695,52 +674,6 @@ async function readCuesForSource(
   }
   const asr = await readAsrResult(bvid, p, cid);
   return asr ? asrCues(asr) : [];
-}
-
-async function syncPageSnapshot(input: PagePayloadInput): Promise<void> {
-  const existing = await readPageRecord(input.bvid, input.p, input.cid);
-  const cid = input.cid ?? existing?.cid;
-  const owner = input.owner ?? existing?.owner ?? metaCache.get(input.bvid)?.owner;
-  const subtitleLang =
-    input.subtitleLang ??
-    (input.cues ? await cachedSubtitleLang(input.bvid, input.p, cid) : existing?.subtitle?.lang);
-  const page = buildPagePayload({
-    ...existing,
-    ...input,
-    cid,
-    owner,
-    subtitle: input.subtitle ?? existing?.subtitle,
-    subtitleLang,
-    cues: input.cues,
-    outline: input.outline ?? existing?.outline,
-    qa: input.qa ?? existing?.qa,
-    marks: input.marks ?? existing?.marks,
-  });
-  await writePageRecord(page);
-}
-
-async function syncQaPage(payload: QaAskPayload, cues: SubtitleCue[], answer: string): Promise<void> {
-  const existing = await readPageRecord(payload.bvid, payload.p, payload.cid);
-  const qaItem: CompanionQa = {
-    at: payload.at,
-    q: payload.question,
-    a: answer,
-    citations: extractCitationSeconds(answer, payload.duration),
-    createdAt: new Date().toISOString(),
-  };
-  const qa = [...(existing?.qa ?? []), qaItem].slice(-50);
-  await syncPageSnapshot({
-    bvid: payload.bvid,
-    p: payload.p,
-    cid: payload.cid,
-    aid: payload.aid,
-    title: payload.title,
-    partTitle: payload.partTitle,
-    pageCount: payload.pageCount,
-    duration: payload.duration,
-    cues,
-    qa,
-  });
 }
 
 /* ------------------------- D5：大纲 ------------------------- */
@@ -842,54 +775,6 @@ function outlineError(error: unknown): OutlineGenerateResponse {
   };
 }
 
-type ViewPoint = { from: number; to: number; content: string };
-
-/** B 站 UP 手标章节（x/player/v2 的 view_points），无字幕视频的兜底大纲来源。 */
-async function fetchViewPoints(
-  tabId: number,
-  aid: number,
-  cid: number,
-  bvid: string,
-): Promise<ViewPoint[]> {
-  const url = `https://api.bilibili.com/x/player/v2?aid=${aid}&cid=${cid}&bvid=${bvid}`;
-  const response = await fetchTextInPage(tabId, url);
-  if (response.error || response.status !== 200) return [];
-  try {
-    const parsed = JSON.parse(response.text) as {
-      code?: number;
-      data?: { view_points?: ViewPoint[] };
-    };
-    if (parsed.code !== 0) return [];
-    return (parsed.data?.view_points ?? []).filter(
-      item => Number.isFinite(item.from) && Number.isFinite(item.to) && item.to > item.from,
-    );
-  } catch {
-    return [];
-  }
-}
-
-function chaptersToSegments(points: ViewPoint[], duration?: number): OutlineSegment[] {
-  const total = duration && duration > 0 ? duration : (points[points.length - 1]?.to ?? 0);
-  const segments = points
-    .map(item => ({
-      start: Math.max(0, Math.floor(item.from)),
-      end: Math.ceil(item.to),
-      title: item.content.trim(),
-    }))
-    .filter(item => item.title !== '' && item.end > item.start)
-    .sort((a, b) => a.start - b.start);
-  if (segments.length === 0) return [];
-
-  segments[0].start = 0;
-  for (let index = 1; index < segments.length; index += 1) {
-    if (segments[index].start > segments[index - 1].end) {
-      segments[index - 1].end = segments[index].start;
-    }
-  }
-  if (total > 0) segments[segments.length - 1].end = total;
-  return coalesceSegments(segments, 15);
-}
-
 /** 只接受 content 抓帧链路产出的 JPEG dataURL，防止任意大图/坏数据进模型。 */
 function isQaFrame(value: unknown): value is QaFrame {
   if (!value || typeof value !== 'object') return false;
@@ -915,9 +800,7 @@ function readOutlineFrames(value: unknown): QaFrame[] {
 
 /** 面板传来的生成方式；认不出来就当没给，走 auto。 */
 function readOutlineMode(value: unknown): OutlineMode | undefined {
-  return value === 'auto' || value === 'subtitle' || value === 'asr' || value === 'chapters'
-    ? value
-    : undefined;
+  return value === 'auto' || value === 'frames' ? value : undefined;
 }
 
 function readKbInfo(value: unknown): VideoInfo | null {
@@ -1084,65 +967,7 @@ async function generateFrameOutline(
   await chrome.storage.local.set({
     [outlineStorageKey(request.bvid, request.p, request.cid)]: outline,
   });
-  void syncPageSnapshot({
-    bvid: request.bvid,
-    p: request.p,
-    cid: request.cid,
-    title: request.title,
-    duration: request.duration,
-    cues: [],
-    outline: segments,
-  }).catch(error => log('outline sync failed', error));
   return outline;
-}
-
-/** 面板传来「换一种方式」之前，先把各条路的可用性摸清楚，免得给出一条走不通的。 */
-async function outlineCapabilities(
-  tabId: number,
-  request: OutlineRequest,
-): Promise<OutlineCapabilities> {
-  const settings = await loadSettings();
-  const caps: OutlineCapabilities = {
-    duration: request.duration,
-    textKey: settings.apiKey.trim() !== '',
-    subtitle: { available: false, label: '没有中文字幕' },
-    asr: { available: false },
-    asrKey: settings.asrApiKey.trim() !== '',
-    chapters: { available: false, count: 0 },
-  };
-
-  try {
-    const loaded = await outlineCues(tabId, request);
-    if (loaded.cues.length > 0) {
-      caps.subtitle = {
-        available: true,
-        label: loaded.track
-          ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
-          : '字幕（本地缓存）',
-      };
-    }
-  } catch (error) {
-    log('capabilities subtitle failed', error);
-  }
-
-  try {
-    caps.asr.available = (await readAsrResult(request.bvid, request.p, request.cid)) !== null;
-  } catch (error) {
-    log('capabilities asr failed', error);
-  }
-
-  try {
-    const meta = await readVideoMeta(tabId);
-    if (meta?.aid && request.cid) {
-      const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
-      const segments = chaptersToSegments(points, request.duration);
-      caps.chapters = { available: segments.length >= 2, count: segments.length };
-    }
-  } catch (error) {
-    log('capabilities chapters failed', error);
-  }
-
-  return caps;
 }
 
 async function generateOutline(
@@ -1151,9 +976,8 @@ async function generateOutline(
 ): Promise<OutlineGenerateResponse> {
   try {
     const settings = await loadSettings();
-    const mode: OutlineMode = request.mode ?? 'auto';
 
-    // 视觉兜底：content 已经抽好帧，不再碰字幕/章节，直接一次视觉请求。
+    // 视觉兜底：content 已经抽好帧，直接一次视觉请求。
     const frames = request.frames ?? [];
     if (frames.length > 0) {
       if (!settings.apiKey.trim()) {
@@ -1166,40 +990,25 @@ async function generateOutline(
     let captions: OutlineCaption = 'subtitle';
     // 测试期诊断：记下「这份大纲到底靠什么生成的」，面板上直接显示。
     let captionDetail = '';
-    // 章节骨架 + 字幕说明时，captions 会被改成 'chapters'，说明来源得单独存。
-    let detailCaptions: OutlineCaption | undefined;
 
-    if (mode === 'asr') {
-      // 用户明确要「用已经转写的文字」，不再拉官方字幕。
+    // 字幕链路：官方字幕 / B 站 AI 字幕缓存优先；没有就用已经转写好的 ASR。
+    // 章节骨架已经去掉：只有章节名的「引言 / 新闻 / 磕头」讲不出内容，
+    // 无字幕时面板会去转写，或者由用户点「按画面生成」。
+    try {
+      const loaded = await outlineCues(tabId, request);
+      cues = loaded.cues;
+      captionDetail = loaded.track
+        ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
+        : '字幕（本地缓存）';
+    } catch (error) {
+      if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
       const asr = await readAsrResult(request.bvid, request.p, request.cid);
-      if (!asr) {
-        throw new OutlineFailure('no-asr', '这个视频还没有转写过，先点「转写这段」');
-      }
-      cues = asrCues(asr);
-      captions = 'asr';
-      captionDetail = '语音转写 ASR（时间戳按字数估算）';
-    } else {
-      try {
-        const loaded = await outlineCues(tabId, request);
-        cues = loaded.cues;
-        captionDetail = loaded.track
-          ? `字幕 ${loaded.track.lan}${loaded.track.lan_doc ? `（${loaded.track.lan_doc}）` : ''}`
-          : '字幕（本地缓存）';
-      } catch (error) {
-        // 用户明确选了「按官方字幕切」，拿不到就是拿不到，别偷偷换路。
-        if (mode === 'subtitle') throw error;
-        if (!(error instanceof OutlineFailure) || error.code !== 'no-subtitle') throw error;
-        // auto 时没有官方字幕：先看有没有缓存过的 ASR（时间戳是估算的，D19 要标注）。
-        // 用户明确选了「用 UP 章节」时不要再偷偷用 ASR 兜底，那不是他要的。
-        const asr =
-          mode === 'auto' ? await readAsrResult(request.bvid, request.p, request.cid) : null;
-        if (asr) {
-          cues = asrCues(asr);
-          captions = 'asr';
-          captionDetail = '语音转写 ASR（时间戳按字数估算）';
-        } else {
-          captionDetail = '没有可用字幕';
-        }
+      if (asr) {
+        cues = asrCues(asr);
+        captions = 'asr';
+        captionDetail = '语音转写 ASR（时间戳按字数估算）';
+      } else {
+        captionDetail = '没有可用字幕';
       }
     }
 
@@ -1209,18 +1018,6 @@ async function generateOutline(
     if (cues.length > 0) {
       const meaningful = cues.filter(cue => hasMeaningfulCueText(cue.content));
       if (meaningful.length === 0) {
-        if (mode === 'subtitle') {
-          throw new OutlineFailure(
-            'no-subtitle',
-            '这个分 P 的字幕只有音乐/环境声，没有可用文字；可以试试语音转写或按画面生成',
-          );
-        }
-        if (mode === 'asr') {
-          throw new OutlineFailure(
-            'no-subtitle',
-            '这个分 P 的转写结果只有音乐/环境声，没有可用文字；可以试试按画面生成',
-          );
-        }
         cues = [];
         captionDetail = '没有可用字幕（只有音乐/环境声）';
       } else {
@@ -1228,138 +1025,101 @@ async function generateOutline(
       }
     }
 
-    // D13：UP 章节优先。章节是人手写的目录，边界准、不花钱，比模型切得准。
-    // 只有 auto 和 chapters 两种方式要读章节，用户选字幕/转写时不该被章节盖掉。
-    let chapters: OutlineSegment[] = [];
-    if (mode === 'auto' || mode === 'chapters') {
-      try {
-        const meta = await readVideoMeta(tabId);
-        if (meta?.aid && request.cid) {
-          const points = await fetchViewPoints(tabId, meta.aid, request.cid, request.bvid);
-          chapters = chaptersToSegments(points, request.duration);
-        }
-      } catch (error) {
-        log('view points failed', error);
-      }
+    if (!settings.apiKey.trim()) {
+      throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
     }
-    if (mode === 'chapters' && chapters.length < 2) {
-      throw new OutlineFailure('no-chapters', 'UP 主没有给这个视频分章节，换个方式试试');
+    if (cues.length === 0) {
+      throw new OutlineFailure(
+        'no-subtitle',
+        '这个视频没有字幕。先点「转写这段」，转完再生成大纲；也可以「按画面生成」用截图凑一份',
+      );
     }
-
-    // cues 的真实来源（官方字幕 / ASR）：章节分支会把 captions 改成 'chapters'，
-    // 先留一份，笔记和底稿要靠它如实标注。
-    const cueCaption = captions;
 
     let segments: OutlineSegment[];
     let model: string;
     let cutSource: string;
-    if (mode === 'chapters' || (mode === 'auto' && chapters.length >= 2)) {
-      // auto 模式下只有章节名、没有字幕说明，交出去的是一份「引言 / 新闻 / 磕头」，
-      // 看不出视频讲了什么。宁可让 UI 去转写，也别交这种东西。
-      // 用户主动选「用 UP 主章节」时不拦，那是他明确要的。
-      if (mode === 'auto' && cues.length === 0) {
-        throw new OutlineFailure('no-subtitle', '这个视频没有中文字幕，UP 主只分了章节标题');
-      }
-      // 说明文字来自语音转写时单独记一笔：笔记里不能因为骨架是章节就说「没有字幕」。
-      if (cueCaption === 'asr') detailCaptions = 'asr';
-      segments = chapters;
-      model = 'bilibili-chapters';
-      captions = 'chapters';
-      cutSource = `UP 章节 ${chapters.length} 段（模型未参与切段）`;
-    } else {
-      if (!settings.apiKey.trim()) {
-        throw new OutlineFailure('no-key', '还没有配置 DeepSeek API Key，请到设置页填写');
-      }
-      if (cues.length === 0) {
-        throw new OutlineFailure(
-          'no-subtitle',
-          '这个视频没有字幕。先在面板上点「转写这段」，转完再生成大纲',
-        );
-      }
+    const prompt = buildOutlinePrompt({
+      title: request.title,
+      duration: request.duration,
+      cues,
+    });
+    if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
 
-      const prompt = buildOutlinePrompt({
-        title: request.title,
-        duration: request.duration,
-        cues,
+    // 每次模型调用单独记一次用量：重试也是真的花钱，成本面板要能看到。
+    const askOutline = async (messages: ChatMessage[], maxTokens: number): Promise<string> => {
+      const callStartedAt = Date.now();
+      let text = '';
+      const result = await callDeepSeek({
+        apiKey: settings.apiKey,
+        baseUrl: settings.apiBaseUrl,
+        model: settings.textModel,
+        messages,
+        thinking: false,
+        maxTokens,
+        temperature: 0.2,
+        onChunk: (kind, chunk) => {
+          if (kind === 'answer') text += chunk;
+        },
       });
-      if (!prompt) throw new OutlineFailure('no-subtitle', '该视频没有字幕');
+      await recordUsage(estimateCostCny(result.usage, callStartedAt), callStartedAt).catch(error =>
+        log('outline usage failed', error),
+      );
+      return text.trim() !== '' ? text : result.text;
+    };
 
-      // 每次模型调用单独记一次用量：重试也是真的花钱，成本面板要能看到。
-      const askOutline = async (messages: ChatMessage[], maxTokens: number): Promise<string> => {
-        const callStartedAt = Date.now();
-        let text = '';
-        const result = await callDeepSeek({
-          apiKey: settings.apiKey,
-          baseUrl: settings.apiBaseUrl,
-          model: settings.textModel,
-          messages,
-          thinking: false,
-          maxTokens,
-          temperature: 0.2,
-          onChunk: (kind, chunk) => {
-            if (kind === 'answer') text += chunk;
-          },
-        });
-        await recordUsage(estimateCostCny(result.usage, callStartedAt), callStartedAt).catch(error =>
-          log('outline usage failed', error),
-        );
-        return text.trim() !== '' ? text : result.text;
-      };
-
-      const baseMaxTokens = Math.min(4096, Math.max(1024, prompt.range.max * 80));
-      const raw = await askOutline(prompt.messages, baseMaxTokens);
-      if (raw.trim() === '') {
-        throw new OutlineFailure('empty', '模型没有返回内容，请重试');
-      }
-
-      let parsed = parseOutline(raw, request.duration, prompt.range, prompt.lineList);
-
-      // D20 分级重试：长视频切段时 JSON 可能被 max_tokens 截断，以前一次失败就整条挂掉。
-      // 从「免费」往「更贵」逐级救，哪一级解析成功就停；都失败才报 bad-output。
-      if (!parsed) {
-        // 第 1 级（免费）：被截断是最常见的失败，本地补个 `]` 就能救。
-        const salvaged = repairTruncatedOutlineJson(raw);
-        if (salvaged) {
-          parsed = parseOutline(salvaged, request.duration, prompt.range, prompt.lineList);
-          if (parsed) log('outline recovered by local truncation repair');
-        }
-      }
-      if (!parsed) {
-        // 第 2 级：把坏输出发回去，只让它修 JSON，不重写内容。
-        log('outline retry: repair json');
-        const repaired = await askOutline(
-          buildOutlineRepairPrompt({ raw, range: prompt.range, title: request.title }),
-          2048,
-        );
-        parsed = parseOutline(repaired, request.duration, prompt.range, prompt.lineList);
-      }
-      if (!parsed) {
-        // 第 3 级：同一份字幕，把输出预算扩到 4096 重发。
-        log('outline retry: bigger budget');
-        const bigger = await askOutline(prompt.messages, 4096);
-        parsed = parseOutline(bigger, request.duration, prompt.range, prompt.lineList);
-      }
-      if (!parsed) {
-        // 第 4 级：隔行抽稀字幕，输出自然短一半；细节会变粗，但好过整条失败。
-        log('outline retry: thinner input');
-        const thinned = buildOutlinePromptFromLines(
-          request.title,
-          request.duration,
-          thinOutlineLines(prompt.lineList),
-        );
-        if (thinned) {
-          const thinner = await askOutline(thinned.messages, 2048);
-          parsed = parseOutline(thinner, request.duration, thinned.range, thinned.lineList);
-        }
-      }
-      if (!parsed) {
-        log('outline raw output', raw.slice(0, 1500));
-        throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
-      }
-      segments = parsed;
-      model = settings.textModel;
-      cutSource = `模型按字幕切 ${segments.length} 段`;
+    const baseMaxTokens = Math.min(4096, Math.max(1024, prompt.range.max * 80));
+    const raw = await askOutline(prompt.messages, baseMaxTokens);
+    if (raw.trim() === '') {
+      throw new OutlineFailure('empty', '模型没有返回内容，请重试');
     }
+
+    let parsed = parseOutline(raw, request.duration, prompt.range, prompt.lineList);
+
+    // D20 分级重试：长视频切段时 JSON 可能被 max_tokens 截断，以前一次失败就整条挂掉。
+    // 从「免费」往「更贵」逐级救，哪一级解析成功就停；都失败才报 bad-output。
+    if (!parsed) {
+      // 第 1 级（免费）：被截断是最常见的失败，本地补个 `]` 就能救。
+      const salvaged = repairTruncatedOutlineJson(raw);
+      if (salvaged) {
+        parsed = parseOutline(salvaged, request.duration, prompt.range, prompt.lineList);
+        if (parsed) log('outline recovered by local truncation repair');
+      }
+    }
+    if (!parsed) {
+      // 第 2 级：把坏输出发回去，只让它修 JSON，不重写内容。
+      log('outline retry: repair json');
+      const repaired = await askOutline(
+        buildOutlineRepairPrompt({ raw, range: prompt.range, title: request.title }),
+        2048,
+      );
+      parsed = parseOutline(repaired, request.duration, prompt.range, prompt.lineList);
+    }
+    if (!parsed) {
+      // 第 3 级：同一份字幕，把输出预算扩到 4096 重发。
+      log('outline retry: bigger budget');
+      const bigger = await askOutline(prompt.messages, 4096);
+      parsed = parseOutline(bigger, request.duration, prompt.range, prompt.lineList);
+    }
+    if (!parsed) {
+      // 第 4 级：隔行抽稀字幕，输出自然短一半；细节会变粗，但好过整条失败。
+      log('outline retry: thinner input');
+      const thinned = buildOutlinePromptFromLines(
+        request.title,
+        request.duration,
+        thinOutlineLines(prompt.lineList),
+      );
+      if (thinned) {
+        const thinner = await askOutline(thinned.messages, 2048);
+        parsed = parseOutline(thinner, request.duration, thinned.range, thinned.lineList);
+      }
+    }
+    if (!parsed) {
+      log('outline raw output', raw.slice(0, 1500));
+      throw new OutlineFailure('bad-output', '模型输出格式不对，请重试');
+    }
+    segments = parsed;
+    model = settings.textModel;
+    cutSource = `模型按字幕切 ${segments.length} 段`;
 
     // D16 + D18：有字幕就补「每段讲了什么」和核心结论；失败不影响大纲本身。
     let conclusions: string[] | undefined;
@@ -1411,23 +1171,11 @@ async function generateOutline(
       segments,
       conclusions,
       captions,
-      detailCaptions,
       captionDetail: `${cutSource} · ${captionDetail}`,
       createdAt: Date.now(),
       model,
     };
     await chrome.storage.local.set({ [outlineStorageKey(request.bvid, request.p, request.cid)]: outline });
-    // D6：大纲成功即入队落盘；失败不影响大纲返回。
-    void syncPageSnapshot({
-      bvid: request.bvid,
-      p: request.p,
-      cid: request.cid,
-      title: request.title,
-      duration: request.duration,
-      cues,
-      subtitleSource: cueCaption === 'asr' ? 'asr' : undefined,
-      outline: segments,
-    }).catch(error => log('outline sync failed', error));
     return { ok: true, outline };
   } catch (error) {
     return outlineError(error);
@@ -1608,9 +1356,6 @@ async function runQa(port: chrome.runtime.Port, requestId: string, payload: QaAs
       elapsedMs: Date.now() - startedAt,
       recordId: record.id,
     });
-
-    // D6：问答完成即入队，失败只写 lastError，不影响回答。
-    void syncQaPage(payload, cues, text).catch(error => log('qa sync failed', error));
   } catch (error) {
     if (error instanceof QaAbortError) {
       postToPort(port, { v: 1, type: 'qa:aborted', requestId, text, reason: active.reason });
@@ -2179,34 +1924,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           code: 'unknown',
           message: error instanceof Error ? error.message : '读取大纲失败',
         } satisfies OutlineGetResponse),
-      );
-    return true;
-  }
-
-  if (message?.type === 'outline:capabilities') {
-    const bvid = typeof message.bvid === 'string' ? message.bvid : '';
-    const p =
-      typeof message.p === 'number' && message.p >= 1 ? Math.floor(message.p) : 0;
-    const cid =
-      typeof message.cid === 'number' && message.cid > 0 ? message.cid : undefined;
-    const title = typeof message.title === 'string' ? message.title.trim() : '';
-    const duration =
-      typeof message.duration === 'number' && Number.isFinite(message.duration)
-        ? message.duration
-        : 0;
-    const tabId =
-      typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
-    if (!bvid || !p || duration <= 0 || tabId === undefined) {
-      sendResponse({ ok: false, message: '缺少 bvid/p/duration 或标签页' });
-      return false;
-    }
-    void outlineCapabilities(tabId, { bvid, p, cid, title, duration })
-      .then(capabilities => sendResponse({ ok: true, capabilities }))
-      .catch(error =>
-        sendResponse({
-          ok: false,
-          message: error instanceof Error ? error.message : '检查可用方式失败',
-        }),
       );
     return true;
   }
