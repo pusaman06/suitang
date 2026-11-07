@@ -188,6 +188,14 @@
         color: #8b93a8;
         font-size: 12px;
       }
+      .field-hint {
+        color: #8b93a8;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .field-hint.warn {
+        color: #f0b35b;
+      }
 
       .diag {
         margin-top: 26px;
@@ -234,6 +242,7 @@
       <label>
         DeepSeek API Key
         <input id="api-key" type="password" placeholder="sk-..." autocomplete="off" />
+        <span id="api-key-hint" class="field-hint">已保存的 Key 不会回填显示；留空保存表示不修改。</span>
       </label>
 
       <label>
@@ -268,6 +277,7 @@
       <label>
         语音转写 Key（SiliconFlow，可选）
         <input id="asr-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+        <span id="asr-key-hint" class="field-hint">已保存的 Key 不会回填显示；留空保存表示不修改。</span>
       </label>
 
       <label>
@@ -308,6 +318,7 @@
         <label>
           API 地址（留空用 https://api.deepseek.com）
           <input id="api-base-url" type="text" placeholder="https://api.deepseek.com" autocomplete="off" />
+          <span id="api-base-hint" class="field-hint">只接受 https；本机 127.0.0.1 / localhost 可用 http。</span>
         </label>
         <label>
           本地 companion 地址

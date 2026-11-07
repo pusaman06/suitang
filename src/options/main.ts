@@ -1,5 +1,12 @@
 import { formatCny } from '../shared/cost';
-import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../shared/settings';
+import {
+  DEFAULT_SETTINGS,
+  isAllowedApiBaseUrl,
+  loadSettings,
+  OFFICIAL_API_HOST,
+  saveSettings,
+} from '../shared/settings';
+import type { Settings } from '../shared/settings';
 import { formatCueTime } from '../shared/subtitles';
 import type { SubtitleResult, VideoMeta } from '../shared/types';
 import type { UsageLedger } from '../shared/usage-store';
@@ -26,6 +33,7 @@ const balanceValue = el<HTMLElement>('#balance-value');
 const balanceStatus = el<HTMLParagraphElement>('#balance-status');
 const refreshBalance = el<HTMLButtonElement>('#refresh-balance');
 const apiBaseUrl = el<HTMLInputElement>('#api-base-url');
+const apiBaseHint = el<HTMLSpanElement>('#api-base-hint');
 const companionUrl = el<HTMLInputElement>('#companion-url');
 const save = el<HTMLButtonElement>('#save');
 const status = el<HTMLParagraphElement>('#status');
@@ -40,6 +48,43 @@ function el<T extends Element>(selector: string): T {
   const node = document.querySelector<T>(selector);
   if (!node) throw new Error(`options page is missing ${selector}`);
   return node;
+}
+
+/** 已保存的 Key 只在 placeholder 里露末四位，输入框本身永远不回填明文。 */
+function keyPlaceholder(saved: string): string {
+  const trimmed = saved.trim();
+  if (trimmed === '') return 'sk-...';
+  // 太短的串取末四位等于泄露大半，宁可什么都不显示。
+  if (trimmed.length < 8) return '已保存（不回填显示）';
+  return `已保存 sk-…${trimmed.slice(-4)}`;
+}
+
+/** 地址框旁的提示：非官方域名要明确说 Key 会发给谁。 */
+function renderApiBaseHint(): void {
+  const raw = apiBaseUrl.value.trim();
+  apiBaseHint.classList.remove('warn');
+  if (raw === '') {
+    apiBaseHint.textContent = '只接受 https；本机 127.0.0.1 / localhost 可用 http。';
+    return;
+  }
+  if (!isAllowedApiBaseUrl(raw)) {
+    apiBaseHint.textContent =
+      '地址无效：必须用 https（本机 127.0.0.1 / localhost 可用 http），保存时会回退默认地址。';
+    apiBaseHint.classList.add('warn');
+    return;
+  }
+  let host = '';
+  try {
+    host = new URL(raw).hostname;
+  } catch {
+    host = '';
+  }
+  if (host !== OFFICIAL_API_HOST) {
+    apiBaseHint.textContent = `Key 会发送给该地址：${host || raw}`;
+    apiBaseHint.classList.add('warn');
+    return;
+  }
+  apiBaseHint.textContent = '使用官方地址，Key 只会发给 api.deepseek.com。';
 }
 
 interface BalanceInfo {
@@ -108,13 +153,16 @@ async function loadBalance(): Promise<void> {
 
 async function init(): Promise<void> {
   const settings = await loadSettings();
-  apiKey.value = settings.apiKey;
+  // Key 不回填明文：输入框留空，placeholder 说明已保存（末四位）。
+  apiKey.value = '';
+  apiKey.placeholder = keyPlaceholder(settings.apiKey);
   visionModel.value = settings.visionModel;
   textModel.value = settings.textModel;
   thinking.checked = settings.thinking;
   frameEnabled.checked = settings.frameEnabled;
   diagnostics.checked = settings.diagnostics;
-  asrApiKey.value = settings.asrApiKey;
+  asrApiKey.value = '';
+  asrApiKey.placeholder = keyPlaceholder(settings.asrApiKey);
   asrModel.value = settings.asrModel;
   jumpAutoPlay.checked = settings.jumpAutoPlay;
   contextWindow.value = String(settings.contextWindowSec);
@@ -123,12 +171,15 @@ async function init(): Promise<void> {
   budgetCny = settings.monthlyBudgetCny;
   monthlyBudget.value = settings.monthlyBudgetCny > 0 ? String(settings.monthlyBudgetCny) : '';
   apiBaseUrl.value = settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : settings.apiBaseUrl;
+  renderApiBaseHint();
   companionUrl.value =
     settings.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : settings.companionUrl;
   renderBudget();
   void loadUsage();
   void loadCacheStats();
 }
+
+apiBaseUrl.addEventListener('input', renderApiBaseHint);
 
 refreshBalance.addEventListener('click', () => {
   void loadBalance();
@@ -185,38 +236,57 @@ cacheClear.addEventListener('click', () => {  void (async () => {
 });
 
 save.addEventListener('click', () => {
-  void saveSettings({
-    apiKey: apiKey.value.trim(),
+  const typedApiKey = apiKey.value.trim();
+  const typedAsrKey = asrApiKey.value.trim();
+  const typedApiBase = apiBaseUrl.value.trim();
+  const patch: Partial<Settings> = {
     visionModel: visionModel.value.trim() || DEFAULT_SETTINGS.visionModel,
     textModel: textModel.value.trim() || DEFAULT_SETTINGS.textModel,
     thinking: thinking.checked,
     frameEnabled: frameEnabled.checked,
     diagnostics: diagnostics.checked,
-    asrApiKey: asrApiKey.value.trim(),
     asrModel: asrModel.value || DEFAULT_SETTINGS.asrModel,
     jumpAutoPlay: jumpAutoPlay.checked,
     contextWindowSec: Number(contextWindow.value) || DEFAULT_SETTINGS.contextWindowSec,
     maxTokens: Number(maxTokens.value) || DEFAULT_SETTINGS.maxTokens,
     historyTurns: Number(historyTurns.value),
     monthlyBudgetCny: Number(monthlyBudget.value) || 0,
-    apiBaseUrl: apiBaseUrl.value.trim(),
+    apiBaseUrl: typedApiBase,
     companionUrl: companionUrl.value.trim(),
-  }).then(next => {
+  };
+  // 留空 = 不修改已保存的 Key；只有显式输入新值才覆盖。
+  if (typedApiKey !== '') patch.apiKey = typedApiKey;
+  if (typedAsrKey !== '') patch.asrApiKey = typedAsrKey;
+  void saveSettings(patch).then(next => {
     contextWindow.value = String(next.contextWindowSec);
     maxTokens.value = String(next.maxTokens);
     historyTurns.value = String(next.historyTurns);
     budgetCny = next.monthlyBudgetCny;
     monthlyBudget.value = next.monthlyBudgetCny > 0 ? String(next.monthlyBudgetCny) : '';
     renderBudget();
-    asrApiKey.value = next.asrApiKey;
+    // 保存后清空输入框，只把新 Key 的末四位放回 placeholder。
+    apiKey.value = '';
+    apiKey.placeholder = keyPlaceholder(next.apiKey);
+    asrApiKey.value = '';
+    asrApiKey.placeholder = keyPlaceholder(next.asrApiKey);
     asrModel.value = next.asrModel;
     jumpAutoPlay.checked = next.jumpAutoPlay;
     companionUrl.value =
       next.companionUrl === DEFAULT_SETTINGS.companionUrl ? '' : next.companionUrl;
-    status.textContent = '已保存';
-    window.setTimeout(() => {
-      status.textContent = '';
-    }, 1500);
+    // 非法地址会被 normalize 回退；把输入框同步成实际生效的地址，别让旧值骗人。
+    const apiBaseRejected =
+      typedApiBase !== '' && next.apiBaseUrl !== typedApiBase.replace(/\/+$/, '');
+    apiBaseUrl.value = next.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl ? '' : next.apiBaseUrl;
+    renderApiBaseHint();
+    status.textContent = apiBaseRejected
+      ? '已保存；API 地址必须用 https（本机地址例外），已回退默认'
+      : '已保存';
+    window.setTimeout(
+      () => {
+        status.textContent = '';
+      },
+      apiBaseRejected ? 5000 : 1500,
+    );
   });
 });
 

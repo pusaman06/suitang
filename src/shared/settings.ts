@@ -5,6 +5,10 @@
 
 export const SETTINGS_STORAGE_KEY = 'settings';
 export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com';
+/** 官方 DeepSeek API 域名；只有发往这里才算「没改地址」。 */
+export const OFFICIAL_API_HOST = 'api.deepseek.com';
+/** 允许用 http 的本机主机名（其余 API 地址必须 https）。 */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 export const DEFAULT_COMPANION_URL = 'http://127.0.0.1:8787';
 export const DEFAULT_ASR_BASE_URL = 'https://api.siliconflow.cn/v1';
 export const DEFAULT_ASR_MODEL = 'FunAudioLLM/SenseVoiceSmall';
@@ -79,9 +83,34 @@ function normalizeModel(value: unknown, fallback: string): string {
   return alias ?? raw;
 }
 
+/**
+ * 解析 API 地址：只接受 https，或本机回环地址上的 http（本地 mock / 代理）。
+ * 返回 null 表示该地址不可用。
+ */
+function parseApiBaseUrl(raw: string): URL | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === 'https:') return url;
+    if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)) return url;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 非空的 API 地址是否可接受；空串表示使用官方默认地址。 */
+export function isAllowedApiBaseUrl(value: unknown): boolean {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw === '') return true;
+  return parseApiBaseUrl(raw) !== null;
+}
+
 function normalizeBaseUrl(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (raw === '') return DEFAULT_API_BASE_URL;
+  // 只允许 https；否则 Key 和字幕会以明文走网络。
+  // 例外：127.0.0.1 / localhost 上的本机服务（e2e mock、本地代理）。
+  if (!parseApiBaseUrl(raw)) return DEFAULT_API_BASE_URL;
   return raw.replace(/\/+$/, '');
 }
 
