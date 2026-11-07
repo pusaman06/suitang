@@ -93,48 +93,63 @@ const log = (...args: unknown[]) => console.log('[video-tutor]', ...args);
 
 const metaCache = new Map<string, VideoMeta>();
 
-async function readVideoMeta(tabId: number): Promise<VideoMeta | null> {
+async function readVideoMeta(tabId: number, expectedBvid?: string): Promise<VideoMeta | null> {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'MAIN',
-        func: () => {
+        args: [expectedBvid ?? ''],
+        func: async (expected: string) => {
           interface Page {
             page: number;
             cid: number;
             part: string;
             duration: number;
           }
-          const state = (window as unknown as {
-            __INITIAL_STATE__?: {
-              p?: number;
-              videoData?: {
-                bvid?: string;
-                aid?: number;
-                title?: string;
-                duration?: number;
-                owner?: { name?: string };
-                pages?: Page[];
-              };
-            };
-          }).__INITIAL_STATE__;
-          const video = state?.videoData;
-          if (!video?.bvid) return null;
-          const pages = (video.pages ?? []).map(page => ({
-            page: page.page,
-            cid: page.cid,
-            part: page.part,
-            duration: page.duration,
-          }));
-          return {
-            bvid: video.bvid,
+          interface VideoData {
+            bvid?: string;
+            aid?: number;
+            title?: string;
+            duration?: number;
+            owner?: { name?: string };
+            pages?: Page[];
+          }
+          const locationBvid = (location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) ?? [])[1] ?? '';
+          const target = expected || locationBvid;
+          if (!target) return null;
+          const toMeta = (video: VideoData) => ({
+            bvid: video.bvid ?? target,
             aid: video.aid,
             title: video.title ?? document.title,
             owner: video.owner?.name,
             duration: video.duration,
-            pages,
-          };
+            pages: (video.pages ?? []).map(page => ({
+              page: page.page,
+              cid: page.cid,
+              part: page.part,
+              duration: page.duration,
+            })),
+          });
+          const state = (window as unknown as {
+            __INITIAL_STATE__?: { videoData?: VideoData };
+          }).__INITIAL_STATE__;
+          const video = state?.videoData;
+          // SPA 换视频后页面里的 __INITIAL_STATE__ 可能还停在上一个视频：bvid 对不上就不能信，
+          // 否则会拿上一个视频的 cid 去转写/取字幕，出来的是别人的内容。
+          if (video?.bvid === target && video.pages?.length) return toMeta(video);
+          try {
+            const response = await fetch(
+              `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(target)}`,
+              { credentials: 'include' },
+            );
+            const payload = (await response.json()) as { code?: number; data?: VideoData };
+            const data = payload?.data;
+            if (payload?.code === 0 && data?.pages?.length) return toMeta(data);
+          } catch {
+            // 接口不通就当没读到，交给外层重试。
+          }
+          return null;
         },
       });
 
@@ -564,10 +579,11 @@ async function transcribeAsr(tabId: number, request: AsrRequest): Promise<AsrRes
     );
   }
 
-  const meta = await readVideoMeta(tabId);
+  const meta = await readVideoMeta(tabId, request.bvid);
   if (!meta?.aid) throw new AsrFailure('no-audio', '读取不到视频信息');
   const page = meta.pages.find(item => item.page === request.p) ?? meta.pages[request.p - 1];
-  const cid = request.cid ?? page?.cid;
+  // 页面里的 meta 才是当前视频的口径；界面传来的 cid 可能还是上一个视频的。
+  const cid = page?.cid ?? request.cid;
   if (!cid) throw new AsrFailure('no-audio', '读取不到当前分 P 的 cid');
   const duration =
     request.duration && request.duration > 0
@@ -783,14 +799,17 @@ async function outlineCues(
 
   const cached = await readCache();
   if (cached.length > 0) return { cues: cached, track: null };
-  if (!request.cid) return { cues: [], track: null };
 
-  const meta = await readVideoMeta(tabId);
+  const meta = await readVideoMeta(tabId, request.bvid);
   if (!meta?.aid) return { cues: [], track: null };
+  const page = meta.pages.find(item => item.page === request.p) ?? meta.pages[request.p - 1];
+  // 同上：以页面 meta 为准，避免换视频后拿旧 cid 去取字幕。
+  const cid = page?.cid ?? request.cid;
+  if (!cid) return { cues: [], track: null };
   const result = await loadSubtitles(tabId, {
     bvid: request.bvid,
     aid: meta.aid,
-    cid: request.cid,
+    cid,
     p: request.p,
     duration: request.duration,
   });
@@ -1605,7 +1624,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(null);
       return false;
     }
-    void readVideoMeta(tabId).then(meta => {
+    void readVideoMeta(tabId, message.bvid).then(meta => {
       sendResponse(meta);
     });
     return true;
